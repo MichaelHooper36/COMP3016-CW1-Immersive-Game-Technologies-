@@ -1,6 +1,8 @@
 #include <iostream>
 #include <windows.h>
 #include <conio.h>
+#include <cstdlib>
+#include <ctime>
 
 using namespace std;
 
@@ -11,11 +13,41 @@ int x, y;
 enum Direction { STOP = 0, LEFT, RIGHT, UP, DOWN };
 Direction dir;
 
+const int boxWidth = 12;
+const int boxHeight = 4;
+int boxX;
+int boxY;
+
 void Setup() {
 	gameOver = false;
-	dir = STOP;
-	x = width / 2;
-	y = height / 2;
+	dir = STOP; 
+
+	// Seed RNG
+	srand(static_cast<unsigned int>(time(nullptr)));
+
+	// Compute allowed ranges so there is at least one empty cell between '#' and '*'
+	int minBoxX = 2;                              // need at least one empty column at j==1
+	int maxBoxX = width - boxWidth - 2;           // leave at least one empty column before right '#'
+	int minBoxY = 1;                              // need at least one empty row at i==0 (top border line above rows)
+	int maxBoxY = height - boxHeight - 1;         // leave at least one empty row before bottom '#'
+
+	// If box is too large for the window, clamp to centered position
+	if (maxBoxX < minBoxX) {
+		boxX = (width - boxWidth) / 2;
+	}
+	else {
+		boxX = minBoxX + (rand() % (maxBoxX - minBoxX + 1));
+	}
+
+	if (maxBoxY < minBoxY) {
+		boxY = (height - boxHeight) / 2;
+	}
+	else {
+		boxY = minBoxY + (rand() % (maxBoxY - minBoxY + 1));
+	}
+
+	x = boxX + boxWidth / 2;
+	y = boxY + boxHeight / 2;
 }
 
 void Draw() {
@@ -29,8 +61,17 @@ void Draw() {
 		for (int j = 0; j < width; j++) {
 			if (j == 0)
 				cout << "#"; // Left border
+
 			if (i == y && j == x)
 				cout << "O"; // Player position
+
+			else if (j >= boxX && j < boxX + boxWidth && i >= boxY && i < boxY + boxHeight) {
+				if (i == boxY || i == boxY + boxHeight - 1 || j == boxX || j == boxX + boxWidth - 1)
+					cout << "*"; // Box border
+				else
+					cout << "."; // Inside the box
+			}
+
 			else
 				cout << " "; // Empty space
 			if (j == width - 1)
@@ -64,46 +105,37 @@ void Input() {
 				gameOver = true;
 				break;
 		}
+		while (_kbhit()) { volatile int ch = _getch(); }
 	}
 }
 
 void Logic() {
+	int newX = x;
+	int newY = y;
+
 	switch (dir) {
 		case LEFT:
-			if (x > 0)
-			{
-				x--;
-				dir = STOP; // Stop movement after one step
-				Draw();
-			}
+			newX = x - 1;
 			break;
 		case RIGHT:
-			if (x < width - 1)
-			{
-				x++;
-				dir = STOP; // Stop movement after one step
-				Draw();
-			}
+			newX = x + 1;
 			break;
 		case UP:
-			if (y > 0)
-			{
-				y--;
-				dir = STOP; // Stop movement after one step
-				Draw();
-			}
+			newY = y - 1;
 			break;
 		case DOWN:
-			if (y < height - 1)
-			{
-				y++;
-				dir = STOP; // Stop movement after one step
-				Draw();
-			}
+			newY = y + 1;
 			break;
 		default:
-			break;
+			return;
 	}
+
+	if (newX > boxX && newX < boxX + boxWidth -1 && newY > boxY && newY < boxY + boxHeight -1) {
+		x = newX;
+		y = newY;
+	}
+	dir = STOP;
+	Draw();
 }
 
 int main() {
@@ -112,6 +144,6 @@ int main() {
 	while (!gameOver) {
 		Input();
 		Logic();
-		Sleep(300);
+		Sleep(100);
 	}
 }
