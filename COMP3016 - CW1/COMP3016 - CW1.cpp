@@ -173,10 +173,10 @@ class Game {
 	const int maxBoxHeight = 8;
 
 	// corridor parameters
-	const int gapFromBox = 3;      // buffer between box wall and corridor boundary (kept moderate)
+	const int gapFromBox = 1;      // buffer between box wall and corridor boundary (kept moderate)
 
 public:
-	Game(int width = 100, int height = 25)
+	Game(int width = 110, int height = 25)
 		: gameOver(false), width(width), height(height), playerX(0), playerY(0), dir(STOP) {
 		grid.assign(height, vector<char>(width, ' '));
 	}
@@ -754,10 +754,102 @@ public:
 				}
 			}
 
+			// Connectivity repair: ensure the box graph is a single connected component
+			// with as few extra corridors as possible (k-1 for k components).
+			auto buildAdj = [&]() {
+				vector<vector<size_t>> adj(n);
+				for (uint64_t key : connections) {
+					size_t a = static_cast<size_t>(key >> 32);
+					size_t b = static_cast<size_t>(key & 0xFFFFFFFFull);
+					if (a < n && b < n) {
+						adj[a].push_back(b);
+						adj[b].push_back(a);
+					}
+				}
+				return adj;
+			};
+
+			auto computeComponents = [&]() {
+				vector<vector<size_t>> comps;
+				vector<int> vis(n, 0);
+				auto adj = buildAdj();
+				for (size_t i = 0; i < n; ++i) {
+					if (vis[i]) continue;
+					vector<size_t> st; st.push_back(i);
+					vis[i] = 1;
+					vector<size_t> comp;
+					while (!st.empty()) {
+						size_t u = st.back(); st.pop_back();
+						comp.push_back(u);
+						for (size_t v : adj[u]) if (!vis[v]) {
+							vis[v] = 1;
+							st.push_back(v);
+						}
+					}
+					comps.push_back(std::move(comp));
+				}
+				return comps;
+			};
+
+			auto comps = computeComponents();
+			// Try to connect components using the shortest feasible corridor between them,
+			// preferring endpoints with degree < 2 to preserve the degree constraint.
+			unordered_set<uint64_t> triedPairs;
+			auto addEdgeKey = [&](size_t a, size_t b) {
+				if (a > b) std::swap(a, b);
+				return (static_cast<uint64_t>(a) << 32) | static_cast<uint64_t>(b);
+			};
+
+			while (comps.size() > 1) {
+				long long bestDist = LLONG_MAX;
+				size_t bestU = SIZE_MAX, bestV = SIZE_MAX;
+
+				// Search for the closest pair across different components with free degree slots.
+				for (size_t ca = 0; ca < comps.size(); ++ca) {
+					for (size_t cb = ca + 1; cb < comps.size(); ++cb) {
+						for (size_t u : comps[ca]) {
+							if (degree[u] >= 2) continue;
+							for (size_t v : comps[cb]) {
+								if (degree[v] >= 2) continue;
+								uint64_t k = addEdgeKey(u, v);
+								if (connections.find(k) != connections.end()) continue;
+								if (triedPairs.find(k) != triedPairs.end()) continue;
+								long long dx = centers[u].first - centers[v].first;
+								long long dy = centers[u].second - centers[v].second;
+								long long d2 = dx*dx + dy*dy;
+								if (d2 < bestDist) {
+									bestDist = d2; bestU = u; bestV = v;
+								}
+							}
+						}
+					}
+				}
+
+				// No pair with free degree slots; stop and let this generation retry.
+				if (bestU == SIZE_MAX) break;
+
+				bool ok = (tryConnectBoxes(bestU, bestV) || tryConnectBoxes(bestV, bestU));
+				if (ok) {
+					connections.insert(addEdgeKey(bestU, bestV));
+					degree[bestU] += 1;
+					degree[bestV] += 1;
+					comps = computeComponents(); // recompute components after change
+				} else {
+					triedPairs.insert(addEdgeKey(bestU, bestV));
+					// keep searching; if all candidates are tried, loop will terminate via bestU==SIZE_MAX
+				}
+			}
+
 			// Check success: every box degree must be 1 or 2
 			success = true;
 			for (size_t i = 0; i < n; ++i) {
 				if (degree[i] < 1 || degree[i] > 2) { success = false; break; }
+			}
+			// Also require global connectivity (single component). If we couldn't connect with deg<=2,
+			// we mark as failure so the generator retries with a new layout.
+			if (success) {
+				auto compsFinal = computeComponents();
+				if (compsFinal.size() != 1) success = false;
 			}
 
 			// If failed this generation attempt, clear corridors and try again (next genAttempt).
