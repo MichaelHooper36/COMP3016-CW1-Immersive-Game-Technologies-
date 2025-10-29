@@ -20,6 +20,44 @@ static const char TILE_BOX_WALL = '*';
 static const char TILE_FLOOR = '.';
 static const char TILE_CORRIDOR_WALL = '+'; // used for corridor boundaries (so we don't confuse with box walls)
 
+class Exit {
+	int ex;
+	int ey;
+public:
+	Exit() : ex(-1), ey(-1) {}
+
+	// Place exit explicitly
+	void placeAt(int x, int y) {
+		ex = x; ey = y;
+	}
+
+	// Place exit on any passable floor ('.'), optionally avoiding player's current position.
+	void placeRandomOnFloor(const vector<vector<char>>& grid, int avoidX = -1, int avoidY = -1) {
+		vector<pair<int, int>> candidates;
+		int h = static_cast<int>(grid.size());
+		int w = h ? static_cast<int>(grid[0].size()) : 0;
+		for (int y = 0; y < h; ++y) {
+			for (int x = 0; x < w; ++x) {
+				if (grid[y][x] == TILE_FLOOR && !(x == avoidX && y == avoidY)) {
+					candidates.emplace_back(x, y);
+				}
+			}
+		}
+		if (!candidates.empty()) {
+			auto p = candidates[rand() % candidates.size()];
+			ex = p.first;
+			ey = p.second;
+		}
+		else {
+			ex = -1;
+			ey = -1;
+		}
+	}
+
+	bool isAt(int x, int y) const { return x == ex && y == ey; }
+};
+
+
 class Box {
 	int boxX;
 	int boxY;
@@ -159,8 +197,8 @@ public:
 
 class Game {
 	bool gameOver;
-	const int width;
-	const int height;
+	int width;
+	int height;
 	int playerX, playerY;
 	Direction dir;
 	vector<Box> boxes;
@@ -175,13 +213,25 @@ class Game {
 	// corridor parameters
 	const int gapFromBox = 1;      // buffer between box wall and corridor boundary (kept moderate)
 
+	Exit exitTile;
+
+	// Leveling
+	int level;
+	static const int MAX_WIDTH = 110;
+	static const int MAX_HEIGHT = 25;
+
 public:
-	Game(int width = 110, int height = 25)
-		: gameOver(false), width(width), height(height), playerX(0), playerY(0), dir(STOP) {
+	Game(int width = 60, int height = 15)
+		: gameOver(false), width(width), height(height), playerX(0), playerY(0), dir(STOP), level(1) {
 		grid.assign(height, vector<char>(width, ' '));
 	}
 
 	void clearGrid() {
+		// Ensure grid matches current width/height (handles dynamic resize between levels).
+		if (static_cast<int>(grid.size()) != height || (height > 0 && static_cast<int>(grid[0].size()) != width)) {
+			grid.assign(height, vector<char>(width, ' '));
+			return;
+		}
 		for (int i = 0; i < height; i++)
 			for (int j = 0; j < width; j++)
 				grid[i][j] = ' ';
@@ -754,8 +804,7 @@ public:
 				}
 			}
 
-			// Connectivity repair: ensure the box graph is a single connected component
-			// with as few extra corridors as possible (k-1 for k components).
+			// Connectivity repair
 			auto buildAdj = [&]() {
 				vector<vector<size_t>> adj(n);
 				for (uint64_t key : connections) {
@@ -859,8 +908,7 @@ public:
 			}
 		}
 
-		// If all attempts failed, we fall back to whatever was produced on the last try.
-		// Place player
+		// Place player in a random box center
 		int starterBox = rand() % static_cast<int>(boxes.size());
 		playerX = boxes[starterBox].x() + boxes[starterBox].width() / 2;
 		playerY = boxes[starterBox].y() + boxes[starterBox].height() / 2;
@@ -882,10 +930,27 @@ public:
 						if (isPassableCorridor(xx, yy)) { playerX = xx; playerY = yy; foundOpening = true; }
 			}
 		}
+
+		// Place exit at the center of a different box than the player's
+		if (!boxes.empty()) {
+			int exitBoxIdx = starterBox;
+			if (boxes.size() > 1) {
+				do {
+					exitBoxIdx = rand() % static_cast<int>(boxes.size());
+				} while (exitBoxIdx == starterBox);
+			}
+			int ex = boxes[exitBoxIdx].x() + boxes[exitBoxIdx].width() / 2;
+			int ey = boxes[exitBoxIdx].y() + boxes[exitBoxIdx].height() / 2;
+			exitTile.placeAt(ex, ey);
+		}
 	}
 
 	void Draw() const {
 		system("cls");
+
+		// HUD
+		cout << "Level " << level << endl;
+
 		// Top border
 		for(int i=0;i<width+2; i++)
 			cout << "#";
@@ -898,6 +963,9 @@ public:
 
 				if (i == playerY && j == playerX) {
 					cout << "O"; // Player position
+				}
+				else if (exitTile.isAt(j, i)) {
+					cout << "x"; // Exit tile (center of a different box)
 				}
 				else {
 					char c = grid[i][j];
@@ -942,6 +1010,14 @@ public:
 		}
 	}
 
+	void nextLevel() {
+		// Increase level and grow the map size up to the configured maximums.
+		level++;
+		width  = min(MAX_WIDTH,  width  + 5);
+		height = min(MAX_HEIGHT, height + 1);
+		Setup();
+	}
+
 	void Logic() {
 		int newX = playerX;
 		int newY = playerY;
@@ -968,6 +1044,14 @@ public:
 			playerY = newY;
 		}
 
+		// Level up on exit
+		if (exitTile.isAt(playerX, playerY)) {
+			nextLevel();
+			Draw();
+			dir = STOP;
+			return;
+		}
+
 		dir = STOP;
 		Draw();
 	}
@@ -978,7 +1062,7 @@ public:
 		while (!gameOver) {
 			Input();
 			Logic();
-			Sleep(100);
+			Sleep(50);
 		}
 	}
 };
