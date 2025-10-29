@@ -167,7 +167,7 @@ class Game {
 	vector<vector<char>> grid;
 
 	const int boxNumber = 10;
-	const int minBoxWidth = 11;
+	const int minBoxWidth = 8;
 	const int maxBoxWidth = 20;
 	const int minBoxHeight = 5;
 	const int maxBoxHeight = 8;
@@ -428,79 +428,202 @@ public:
 		// Seed RNG
 		srand(static_cast<unsigned int>(time(nullptr)));
 
-		boxes.clear();
+		// We'll try a few times to generate a layout where every box ends up with degree 1 or 2.
+		const int maxGenerationAttempts = 12;
+		bool success = false;
 
-		for (int boxesPlaced = 0; boxesPlaced < boxNumber; boxesPlaced++) {
-			bool boxPlaced = false;
-			for (int attempts = 0; attempts < 400; attempts++) {
-				int maxWidthAllowed = min(maxBoxWidth, width - 4);
-				int maxHeightAllowed = min(maxBoxHeight, height - 3);
-				int boxW = minBoxWidth + (maxWidthAllowed > minBoxWidth ? rand() % (maxWidthAllowed - minBoxWidth + 1) : 0);
-				int boxH = minBoxHeight + (maxHeightAllowed > minBoxHeight ? rand() % (maxHeightAllowed - minBoxHeight + 1) : 0);
+		for (int genAttempt = 0; genAttempt < maxGenerationAttempts && !success; ++genAttempt) {
+			// 1) generate non-overlapping boxes
+			boxes.clear();
+			for (int boxesPlaced = 0; boxesPlaced < boxNumber; boxesPlaced++) {
+				bool boxPlaced = false;
+				for (int attempts = 0; attempts < 400; attempts++) {
+					int maxWidthAllowed = min(maxBoxWidth, width - 4);
+					int maxHeightAllowed = min(maxBoxHeight, height - 3);
+					int boxW = minBoxWidth + (maxWidthAllowed > minBoxWidth ? rand() % (maxWidthAllowed - minBoxWidth + 1) : 0);
+					int boxH = minBoxHeight + (maxHeightAllowed > minBoxHeight ? rand() % (maxHeightAllowed - minBoxHeight + 1) : 0);
 
-				Box newBox(boxW, boxH);
-				newBox.placeRandom(width, height);
+					Box newBox(boxW, boxH);
+					newBox.placeRandom(width, height);
 
-				bool overlapping = false;
-				for (const Box& existingBox : boxes) {
-					if (newBox.intersects(existingBox, 1)) {
-						overlapping = true;
+					bool overlapping = false;
+					for (const Box& existingBox : boxes) {
+						if (newBox.intersects(existingBox, 1)) {
+							overlapping = true;
+							break;
+						}
+					}
+
+					if (!overlapping) {
+						boxes.push_back(newBox);
+						boxPlaced = true;
 						break;
 					}
 				}
-
-				if (!overlapping) {
-					boxes.push_back(newBox);
-					boxPlaced = true;
+				if (!boxPlaced) {
 					break;
 				}
 			}
-			if (!boxPlaced) {
+
+			if (boxes.empty()) {
+				int backupBoxWidth = min(maxBoxWidth, width - 4);
+				int backupBoxHeight = min(maxBoxHeight, height - 3);
+				Box backupBox(backupBoxWidth, backupBoxHeight);
+				backupBox.placeAt((width - backupBoxWidth) / 2, (height - backupBoxHeight) / 2);
+				boxes.push_back(backupBox);
+			}
+
+			// Start with fresh grid and draw boxes
+			clearGrid();
+			for (const Box& box : boxes) box.drawBox(grid);
+
+			// Helper to create a stable pair key for unordered_set (min<<32 | max)
+			auto pairKey = [](size_t a, size_t b) -> uint64_t {
+				if (a > b) std::swap(a, b);
+				return (static_cast<uint64_t>(a) << 32) | static_cast<uint64_t>(b);
+			};
+
+			size_t n = boxes.size();
+			// If not enough boxes, mark as success (nothing to connect)
+			if (n < 2) {
+				success = true;
 				break;
 			}
-		}
 
-		if (boxes.empty()) {
-			int backupBoxWidth = min(maxBoxWidth, width - 4);
-			int backupBoxHeight = min(maxBoxHeight, height - 3);
-			Box backupBox(backupBoxWidth, backupBoxHeight);
-			backupBox.placeAt((width - backupBoxWidth) / 2, (height - backupBoxHeight) / 2);
-			boxes.push_back(backupBox);
-		}
+			// Precompute centers
+			vector<pair<int,int>> centers(n);
+			for (size_t i = 0; i < n; ++i)
+				centers[i] = make_pair(boxes[i].x() + boxes[i].width() / 2, boxes[i].y() + boxes[i].height() / 2);
 
-		clearGrid();
-		for (const Box& box : boxes) box.drawBox(grid);
+			vector<bool> used(n, false);
+			vector<size_t> order;
+			order.reserve(n);
+			size_t cur = rand() % n;
+			used[cur] = true;
+			order.push_back(cur);
+			for (size_t step = 1; step < n; ++step) {
+				long long bestDist = LLONG_MAX;
+				size_t bestIdx = SIZE_MAX;
+				for (size_t j = 0; j < n; ++j) {
+					if (used[j]) continue;
+					long long dx = centers[cur].first - centers[j].first;
+					long long dy = centers[cur].second - centers[j].second;
+					long long sd = dx*dx + dy*dy;
+					if (sd < bestDist) { bestDist = sd; bestIdx = j; }
+				}
+				if (bestIdx == SIZE_MAX) {
+					// fallback: pick any unused
+					for (size_t j = 0; j < n; ++j) if (!used[j]) { bestIdx = j; break; }
+				}
+				used[bestIdx] = true;
+				order.push_back(bestIdx);
+				cur = bestIdx;
+			}
 
-		// Helper to create a stable pair key for unordered_set (min<<32 | max)
-		auto pairKey = [](size_t a, size_t b) -> uint64_t {
-			if (a > b) std::swap(a, b);
-			return (static_cast<uint64_t>(a) << 32) | static_cast<uint64_t>(b);
-		};
+			// Track connections and degrees, enforce max degree 2
+			unordered_set<uint64_t> connections;
+			connections.reserve(n * 2);
+			vector<int> degree(n, 0);
 
-		// store successfully created connections (undirected)
-		unordered_set<uint64_t> connections;
-		connections.reserve(boxes.size()*2);
+			// Try to connect consecutive boxes along the path first
+			for (size_t k = 1; k < order.size(); ++k) {
+				size_t a = order[k - 1];
+				size_t b = order[k];
+				// ensure we don't exceed degree 2 for either endpoint
+				if (degree[a] >= 2 || degree[b] >= 2) continue;
 
-		// create spanning tree: try to connect each box i to some earlier box j without overlap
-		for (size_t i = 1; i < boxes.size(); i++) {
-			vector<size_t> candidates;
-			for (size_t j = 0; j < i; j++) candidates.push_back(j);
-			random_shuffle(candidates.begin(), candidates.end());
-			bool connected = false;
-			for (size_t idx = 0; idx < candidates.size(); idx++) {
-				size_t j = candidates[idx];
-				if (tryConnectBoxes(i, j)) { 
-					connections.insert(pairKey(i,j));
-					connected = true; 
-					break; 
+				uint64_t key = pairKey(a, b);
+				if (connections.find(key) != connections.end()) continue;
+
+				bool ok = false;
+				// try both directions (different preferred walls)
+				if (tryConnectBoxes(a, b)) ok = true;
+				else if (tryConnectBoxes(b, a)) ok = true;
+
+				if (ok) {
+					connections.insert(key);
+					degree[a] += 1;
+					degree[b] += 1;
 				}
 			}
-			// if couldn't connect safely, attempt a best-effort connection to first candidate
-			if (!connected && !candidates.empty()) {
-				tryConnectBoxes(i, candidates[0]);
+
+			// Greedy: connect nearest pairs where both endpoints have degree < 2 until no progress
+			bool progress = true;
+			while (progress) {
+				progress = false;
+				// build list of candidate pairs (both deg < 2, not already connected)
+				vector<pair<long long, pair<size_t,size_t>>> cand;
+				cand.reserve(n*n/4);
+				for (size_t i = 0; i < n; ++i) {
+					if (degree[i] >= 2) continue;
+					for (size_t j = i + 1; j < n; ++j) {
+						if (degree[j] >= 2) continue;
+						uint64_t kkey = pairKey(i, j);
+						if (connections.find(kkey) != connections.end()) continue;
+						long long dx = centers[i].first - centers[j].first;
+						long long dy = centers[i].second - centers[j].second;
+						cand.emplace_back(dx*dx + dy*dy, make_pair(i,j));
+					}
+				}
+				if (cand.empty()) break;
+				sort(cand.begin(), cand.end());
+				for (auto &p : cand) {
+					size_t a = p.second.first;
+					size_t b = p.second.second;
+					if (degree[a] >= 2 || degree[b] >= 2) continue;
+					uint64_t key = pairKey(a,b);
+					if (connections.find(key) != connections.end()) continue;
+					if (tryConnectBoxes(a,b) || tryConnectBoxes(b,a)) {
+						connections.insert(key);
+						degree[a] += 1;
+						degree[b] += 1;
+						progress = true;
+						break; // recompute candidates after change
+					}
+				}
+			}
+
+			// Final pass: ensure every box has degree >= 1 by trying nearest neighbours (respecting max degree 2).
+			for (size_t i = 0; i < n; ++i) {
+				if (degree[i] >= 1) continue;
+				vector<pair<long long, size_t>> neigh;
+				neigh.reserve(n-1);
+				for (size_t j = 0; j < n; ++j) {
+					if (j == i) continue;
+					long long dx = centers[i].first - centers[j].first;
+					long long dy = centers[i].second - centers[j].second;
+					neigh.emplace_back(dx*dx + dy*dy, j);
+				}
+				sort(neigh.begin(), neigh.end());
+				for (auto &p : neigh) {
+					size_t j = p.second;
+					if (degree[j] >= 2) continue; // keep max degree 2
+					uint64_t key = pairKey(i, j);
+					if (connections.find(key) != connections.end()) continue;
+					if (tryConnectBoxes(i, j) || tryConnectBoxes(j, i)) {
+						connections.insert(key);
+						degree[i] += 1;
+						degree[j] += 1;
+						break; // i now has degree >=1
+					}
+				}
+			}
+
+			// Check success: every box degree must be 1 or 2
+			success = true;
+			for (size_t i = 0; i < n; ++i) {
+				if (degree[i] < 1 || degree[i] > 2) { success = false; break; }
+			}
+
+			// If failed this generation attempt, clear corridors and try again (next genAttempt).
+			if (!success) {
+				clearGrid(); // remove any corridors placed during failed attempt
+				// continue to next genAttempt
 			}
 		}
 
+		// If all attempts failed, we fall back to whatever was produced on the last try.
+		// Place player
 		int starterBox = rand() % static_cast<int>(boxes.size());
 		playerX = boxes[starterBox].x() + boxes[starterBox].width() / 2;
 		playerY = boxes[starterBox].y() + boxes[starterBox].height() / 2;
