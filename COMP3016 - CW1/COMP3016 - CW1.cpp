@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <utility>
 #include <unordered_set>
+#include <cmath>
 
 using namespace std;
 
@@ -166,24 +167,24 @@ class Game {
 	vector<vector<char>> grid;
 
 	const int boxNumber = 10;
-	const int minBoxWidth = 8;
+	const int minBoxWidth = 11;
 	const int maxBoxWidth = 20;
-	const int minBoxHeight = 4;
+	const int minBoxHeight = 5;
 	const int maxBoxHeight = 8;
 
 	// corridor parameters
-	const int gapFromBox = 2;      // buffer between box wall and corridor boundary (kept moderate)
+	const int gapFromBox = 5;      // buffer between box wall and corridor boundary (kept moderate)
 	const int corridorHalf = 1;    // corridor half-width (center +/-1 => 3-wide corridor)
 
 public:
-	Game(int width = 60, int height = 20)
+	Game(int width = 100, int height = 25)
 		: gameOver(false), width(width), height(height), playerX(0), playerY(0), dir(STOP) {
 		grid.assign(height, vector<char>(width, ' '));
 	}
 
 	void clearGrid() {
-		for (int i = 0; i < height; ++i)
-			for (int j = 0; j < width; ++j)
+		for (int i = 0; i < height; i++)
+			for (int j = 0; j < width; j++)
 				grid[i][j] = ' ';
 	}
 
@@ -201,14 +202,14 @@ public:
 	void lShapedCorridor(int sx, int sy, int ex, int ey, bool horizontalFirst, vector<pair<int, int>>& outCenters) const {
 		outCenters.clear();
 		if (horizontalFirst) {
-			if (sx <= ex) for (int x = sx; x <= ex; ++x) outCenters.emplace_back(x, sy);
+			if (sx <= ex) for (int x = sx; x <= ex; x++) outCenters.emplace_back(x, sy);
 			else for (int x = sx; x >= ex; --x) outCenters.emplace_back(x, sy);
-			if (sy <= ey) for (int y = sy + (sy==ey?0:1); y <= ey; ++y) outCenters.emplace_back(ex, y);
+			if (sy <= ey) for (int y = sy + (sy==ey?0:1); y <= ey; y++) outCenters.emplace_back(ex, y);
 			else for (int y = sy - (sy==ey?0:1); y >= ey; --y) outCenters.emplace_back(ex, y);
 		} else {
-			if (sy <= ey) for (int y = sy; y <= ey; ++y) outCenters.emplace_back(sx, y);
+			if (sy <= ey) for (int y = sy; y <= ey; y++) outCenters.emplace_back(sx, y);
 			else for (int y = sy; y >= ey; --y) outCenters.emplace_back(sx, y);
-			if (sx <= ex) for (int x = sx + (sx==ex?0:1); x <= ex; ++x) outCenters.emplace_back(x, ey);
+			if (sx <= ex) for (int x = sx + (sx==ex?0:1); x <= ex; x++) outCenters.emplace_back(x, ey);
 			else for (int x = sx - (sx==ex?0:1); x >= ex; --x) outCenters.emplace_back(x, ey);
 		}
 	}
@@ -216,10 +217,10 @@ public:
 	void straightCenters(int sx, int sy, int ex, int ey, vector<pair<int,int>>& outCenters) const {
 		outCenters.clear();
 		if (sy == ey) {
-			if (sx <= ex) for (int x = sx; x <= ex; ++x) outCenters.emplace_back(x, sy);
+			if (sx <= ex) for (int x = sx; x <= ex; x++) outCenters.emplace_back(x, sy);
 			else for (int x = sx; x >= ex; --x) outCenters.emplace_back(x, sy);
 		} else if (sx == ex) {
-			if (sy <= ey) for (int y = sy; y <= ey; ++y) outCenters.emplace_back(sx, y);
+			if (sy <= ey) for (int y = sy; y <= ey; y++) outCenters.emplace_back(sx, y);
 			else for (int y = sy; y >= ey; --y) outCenters.emplace_back(sx, y);
 		} else {
 			lShapedCorridor(sx, sy, ex, ey, true, outCenters);
@@ -241,7 +242,7 @@ public:
 
 		for (const auto& c : centers) {
 			int cx = c.first, cy = c.second;
-			for (int dy = -1; dy <= 1; ++dy) {
+			for (int dy = -1; dy <= 1; dy++) {
 				for (int dx = -1; dx <= 1; ++dx) {
 					int nx = cx + dx, ny = cy + dy;
 					if (nx < 0 || nx >= width || ny < 0 || ny >= height) return false;
@@ -275,8 +276,8 @@ public:
 		}
 		for (const auto &c : centers) {
 			int cx = c.first, cy = c.second;
-			for (int dy = -1; dy <= 1; ++dy) {
-				for (int dx = -1; dx <= 1; ++dx) {
+			for (int dy = -1; dy <= 1; dy++) {
+				for (int dx = -1; dx <= 1; dx++) {
 					if (dx == 0 && dy == 0) continue;
 					int nx = cx + dx, ny = cy + dy;
 					if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
@@ -292,17 +293,10 @@ public:
 	// fixed: create opening but keep corridor padding by writing side walls when stepping from wall -> center
 	void createOpeningAndConnectWallToCenter(pair<int,int> wall, pair<int,int> center) {
 		int wx = wall.first, wy = wall.second;
-		// open the wall (3-wide)
-		for (int dx = -1; dx <= 1; ++dx) {
-			int x = wx + dx, y = wy;
-			if (x >= 0 && x < width && y >= 0 && y < height) {
-				if (grid[y][x] == TILE_BOX_WALL || grid[y][x] == ' ' || grid[y][x] == TILE_CORRIDOR_WALL) grid[y][x] = TILE_FLOOR;
-			}
-		}
-		for (int dy = -1; dy <= 1; ++dy) {
-			int x = wx, y = wy + dy;
-			if (x >= 0 && x < width && y >= 0 && y < height) {
-				if (grid[y][x] == TILE_BOX_WALL || grid[y][x] == ' ' || grid[y][x] == TILE_CORRIDOR_WALL) grid[y][x] = TILE_FLOOR;
+		// open the wall (single-tile opening now)
+		if (wx >= 0 && wx < width && wy >= 0 && wy < height) {
+			if (grid[wy][wx] == TILE_BOX_WALL || grid[wy][wx] == ' ' || grid[wy][wx] == TILE_CORRIDOR_WALL) {
+				grid[wy][wx] = TILE_FLOOR;
 			}
 		}
 
@@ -361,37 +355,69 @@ public:
 
 		vector<pair<int,int>> centers;
 
+		// Collect pairs and split into aligned (straight) and non-aligned (L-shaped) attempts.
+		vector<pair<pair<int,int>, pair<int,int>>> alignedPairs;
+		vector<pair<pair<int,int>, pair<int,int>>> lShapedPairs;
+
 		for (auto sWall : startWalls) {
 			for (auto eWall : endWalls) {
 				auto sCenter = outsideCenterFromWall(boxes[i], sWall);
 				auto eCenter = outsideCenterFromWall(boxes[j], eWall);
 
+				// skip out-of-bounds centers early
 				if (sCenter.first < 0 || sCenter.first >= width || sCenter.second < 0 || sCenter.second >= height) continue;
 				if (eCenter.first < 0 || eCenter.first >= width || eCenter.second < 0 || eCenter.second >= height) continue;
 
 				if (sCenter.second == eCenter.second || sCenter.first == eCenter.first) {
-					straightCenters(sCenter.first, sCenter.second, eCenter.first, eCenter.second, centers);
-					if (pathFits(centers, i, j, sWall, eWall)) {
-						writeCentersAsCorridor(centers);
-						// create openings and connect while preserving padding
-						createOpeningAndConnectWallToCenter(sWall, sCenter);
-						createOpeningAndConnectWallToCenter(eWall, eCenter);
-						return true;
-					}
-				}
-
-				for (int order = 0; order < 2; ++order) {
-					bool horizontalFirst = (order == 0);
-					lShapedCorridor(sCenter.first, sCenter.second, eCenter.first, eCenter.second, horizontalFirst, centers);
-					if (pathFits(centers, i, j, sWall, eWall)) {
-						writeCentersAsCorridor(centers);
-						createOpeningAndConnectWallToCenter(sWall, sCenter);
-						createOpeningAndConnectWallToCenter(eWall, eCenter);
-						return true;
-					}
+					alignedPairs.emplace_back(sWall, eWall);
+				} else {
+					lShapedPairs.emplace_back(sWall, eWall);
 				}
 			}
 		}
+
+		// First attempt: all straight (aligned) pairs
+		for (const auto &pairWalls : alignedPairs) {
+			auto sWall = pairWalls.first;
+			auto eWall = pairWalls.second;
+			auto sCenter = outsideCenterFromWall(boxes[i], sWall);
+			auto eCenter = outsideCenterFromWall(boxes[j], eWall);
+
+			straightCenters(sCenter.first, sCenter.second, eCenter.first, eCenter.second, centers);
+			if (pathFits(centers, i, j, sWall, eWall)) {
+				writeCentersAsCorridor(centers);
+				createOpeningAndConnectWallToCenter(sWall, sCenter);
+				createOpeningAndConnectWallToCenter(eWall, eCenter);
+				return true;
+			}
+		}
+
+		// Second attempt: L-shaped pairs. Try the order that produces the longer first straight leg first.
+		for (const auto &pairWalls : lShapedPairs) {
+			auto sWall = pairWalls.first;
+			auto eWall = pairWalls.second;
+			auto sCenter = outsideCenterFromWall(boxes[i], sWall);
+			auto eCenter = outsideCenterFromWall(boxes[j], eWall);
+
+			int horizLen = abs(sCenter.first - eCenter.first);
+			int vertLen  = abs(sCenter.second - eCenter.second);
+
+			// prefer the L-order that yields the longer initial straight leg
+			int firstOrder = (horizLen >= vertLen) ? 0 : 1;
+			int orders[2] = { firstOrder, 1 - firstOrder };
+
+			for (int k = 0; k < 2; k++) {
+				bool horizontalFirst = (orders[k] == 0);
+				lShapedCorridor(sCenter.first, sCenter.second, eCenter.first, eCenter.second, horizontalFirst, centers);
+				if (pathFits(centers, i, j, sWall, eWall)) {
+					writeCentersAsCorridor(centers);
+					createOpeningAndConnectWallToCenter(sWall, sCenter);
+					createOpeningAndConnectWallToCenter(eWall, eCenter);
+					return true;
+				}
+			}
+		}
+
 		return false;
 	}
 
@@ -404,9 +430,9 @@ public:
 
 		boxes.clear();
 
-		for (int boxesPlaced = 0; boxesPlaced < boxNumber; ++boxesPlaced) {
+		for (int boxesPlaced = 0; boxesPlaced < boxNumber; boxesPlaced++) {
 			bool boxPlaced = false;
-			for (int attempts = 0; attempts < 400; ++attempts) {
+			for (int attempts = 0; attempts < 400; attempts++) {
 				int maxWidthAllowed = min(maxBoxWidth, width - 4);
 				int maxHeightAllowed = min(maxBoxHeight, height - 3);
 				int boxW = minBoxWidth + (maxWidthAllowed > minBoxWidth ? rand() % (maxWidthAllowed - minBoxWidth + 1) : 0);
@@ -445,15 +471,29 @@ public:
 		clearGrid();
 		for (const Box& box : boxes) box.drawBox(grid);
 
+		// Helper to create a stable pair key for unordered_set (min<<32 | max)
+		auto pairKey = [](size_t a, size_t b) -> uint64_t {
+			if (a > b) std::swap(a, b);
+			return (static_cast<uint64_t>(a) << 32) | static_cast<uint64_t>(b);
+		};
+
+		// store successfully created connections (undirected)
+		unordered_set<uint64_t> connections;
+		connections.reserve(boxes.size()*2);
+
 		// create spanning tree: try to connect each box i to some earlier box j without overlap
-		for (size_t i = 1; i < boxes.size(); ++i) {
+		for (size_t i = 1; i < boxes.size(); i++) {
 			vector<size_t> candidates;
-			for (size_t j = 0; j < i; ++j) candidates.push_back(j);
+			for (size_t j = 0; j < i; j++) candidates.push_back(j);
 			random_shuffle(candidates.begin(), candidates.end());
 			bool connected = false;
-			for (size_t idx = 0; idx < candidates.size(); ++idx) {
+			for (size_t idx = 0; idx < candidates.size(); idx++) {
 				size_t j = candidates[idx];
-				if (tryConnectBoxes(i, j)) { connected = true; break; }
+				if (tryConnectBoxes(i, j)) { 
+					connections.insert(pairKey(i,j));
+					connected = true; 
+					break; 
+				}
 			}
 			// if couldn't connect safely, attempt a best-effort connection to first candidate
 			if (!connected && !candidates.empty()) {
@@ -467,8 +507,8 @@ public:
 
 		if (!isPassableCorridor(playerX, playerY)) {
 			bool foundOpening = false;
-			for (int dy = 0; dy < boxes[starterBox].height() && !foundOpening; ++dy) {
-				for (int dx = 0; dx < boxes[starterBox].width() && !foundOpening; ++dx) {
+			for (int dy = 0; dy < boxes[starterBox].height() && !foundOpening; dy++) {
+				for (int dx = 0; dx < boxes[starterBox].width() && !foundOpening; dx++) {
 					int tx = boxes[starterBox].x() + dx;
 					int ty = boxes[starterBox].y() + dy;
 					if (tx >= 0 && tx < width && ty >= 0 && ty < height && isPassableCorridor(tx, ty)) {
@@ -477,8 +517,8 @@ public:
 				}
 			}
 			if (!foundOpening) {
-				for (int yy = 0; yy < height && !foundOpening; ++yy)
-					for (int xx = 0; xx < width && !foundOpening; ++xx)
+				for (int yy = 0; yy < height && !foundOpening; yy++)
+					for (int xx = 0; xx < width && !foundOpening; xx++)
 						if (isPassableCorridor(xx, yy)) { playerX = xx; playerY = yy; foundOpening = true; }
 			}
 		}
