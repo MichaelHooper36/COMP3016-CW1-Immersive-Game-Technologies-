@@ -173,8 +173,7 @@ class Game {
 	const int maxBoxHeight = 8;
 
 	// corridor parameters
-	const int gapFromBox = 5;      // buffer between box wall and corridor boundary (kept moderate)
-	const int corridorHalf = 1;    // corridor half-width (center +/-1 => 3-wide corridor)
+	const int gapFromBox = 3;      // buffer between box wall and corridor boundary (kept moderate)
 
 public:
 	Game(int width = 100, int height = 25)
@@ -188,10 +187,19 @@ public:
 				grid[i][j] = ' ';
 	}
 
-	pair<int,int> outsideCenterFromWall(const Box& b, pair<int,int> wall) const {
+	pair<int,int> outsideCenterFromWall(const Box& b, pair<int,int> wall, pair<int,int> target) const {
 		int wx = wall.first;
 		int wy = wall.second;
-		int offset = gapFromBox + corridorHalf;
+
+		// allow immediate bends by not tying offset to corridor width
+		int maxOffset = gapFromBox;
+
+		// adaptive offset: don't place the corridor center farther than halfway
+		// along the Manhattan route from this wall to the target center.
+		int manhattanToTarget = abs(wx - target.first) + abs(wy - target.second);
+		int halfDist = max(1, manhattanToTarget / 2);
+
+		int offset = min(maxOffset, halfDist);
 
 		if (wx == b.x()) return make_pair(wx - offset, wy);
 		if (wx == b.x() + b.width() - 1) return make_pair(wx + offset, wy);
@@ -201,17 +209,49 @@ public:
 
 	void lShapedCorridor(int sx, int sy, int ex, int ey, bool horizontalFirst, vector<pair<int, int>>& outCenters) const {
 		outCenters.clear();
-		if (horizontalFirst) {
-			if (sx <= ex) for (int x = sx; x <= ex; x++) outCenters.emplace_back(x, sy);
-			else for (int x = sx; x >= ex; --x) outCenters.emplace_back(x, sy);
-			if (sy <= ey) for (int y = sy + (sy==ey?0:1); y <= ey; y++) outCenters.emplace_back(ex, y);
-			else for (int y = sy - (sy==ey?0:1); y >= ey; --y) outCenters.emplace_back(ex, y);
-		} else {
-			if (sy <= ey) for (int y = sy; y <= ey; y++) outCenters.emplace_back(sx, y);
-			else for (int y = sy; y >= ey; --y) outCenters.emplace_back(sx, y);
-			if (sx <= ex) for (int x = sx + (sx==ex?0:1); x <= ex; x++) outCenters.emplace_back(x, ey);
-			else for (int x = sx - (sx==ex?0:1); x >= ex; --x) outCenters.emplace_back(x, ey);
+
+		// If endpoints coincide, just return the single center
+		if (sx == ex && sy == ey) {
+			outCenters.emplace_back(sx, sy);
+			return;
 		}
+
+		// Build a full Manhattan path from start -> end using the requested leg-order.
+		auto buildPath = [&](int ax, int ay, int bx, int by, bool horFirst) {
+			vector<pair<int,int>> path;
+			int x = ax, y = ay;
+			path.emplace_back(x, y);
+
+			if (horFirst) {
+				// horizontal then vertical
+				while (x != bx) { x += (bx > x) ? 1 : -1; path.emplace_back(x, y); }
+				while (y != by) { y += (by > y) ? 1 : -1; path.emplace_back(x, y); }
+			} else {
+				// vertical then horizontal
+				while (y != by) { y += (by > y) ? 1 : -1; path.emplace_back(x, y); }
+				while (x != bx) { x += (bx > x) ? 1 : -1; path.emplace_back(x, y); }
+			}
+			return path;
+		};
+
+		// Create the Manhattan route following the chosen initial direction.
+		vector<pair<int,int>> full = buildPath(sx, sy, ex, ey, horizontalFirst);
+
+		// Pick the midpoint index on that route (integer midpoint).
+		size_t midIdx = full.size() / 2;
+
+		// Compose outCenters: start..mid then mid..end (avoid duplicate mid)
+		outCenters.reserve(full.size());
+		for (size_t i = 0; i <= midIdx; ++i) outCenters.push_back(full[i]);
+		for (size_t i = midIdx + 1; i < full.size(); ++i) outCenters.push_back(full[i]);
+
+		// Remove consecutive duplicates just in case
+		vector<pair<int,int>> tmp;
+		tmp.reserve(outCenters.size());
+		for (const auto &p : outCenters) {
+			if (tmp.empty() || tmp.back() != p) tmp.push_back(p);
+		}
+		outCenters.swap(tmp);
 	}
 
 	void straightCenters(int sx, int sy, int ex, int ey, vector<pair<int,int>>& outCenters) const {
@@ -247,7 +287,11 @@ public:
 					int nx = cx + dx, ny = cy + dy;
 					if (nx < 0 || nx >= width || ny < 0 || ny >= height) return false;
 					char cur = grid[ny][nx];
-					if (cur == ' ') continue;
+
+					// Allow corridor boundary '+' to be treated like empty space for fitting a new corridor.
+					// This lets two L-legs meet where previously only padding '+' existed between them.
+					if (cur == ' ' || cur == TILE_CORRIDOR_WALL) continue;
+
 					if (make_pair(nx, ny) == startWall) continue;
 					if (make_pair(nx, ny) == endWall) continue;
 					if (startBoxIdx < boxes.size() && boxes[startBoxIdx].contains(nx, ny)) continue;
@@ -291,46 +335,78 @@ public:
 	}
 
 	// fixed: create opening but keep corridor padding by writing side walls when stepping from wall -> center
-	void createOpeningAndConnectWallToCenter(pair<int,int> wall, pair<int,int> center) {
+	void createOpeningAndConnectWallToCenter(pair<int, int> wall, pair<int, int> center) {
 		int wx = wall.first, wy = wall.second;
-		// open the wall (single-tile opening now)
+		// open the wall (single-tile opening)
 		if (wx >= 0 && wx < width && wy >= 0 && wy < height) {
 			if (grid[wy][wx] == TILE_BOX_WALL || grid[wy][wx] == ' ' || grid[wy][wx] == TILE_CORRIDOR_WALL) {
 				grid[wy][wx] = TILE_FLOOR;
 			}
 		}
 
-		// connect from wall to center, but maintain corridor padding:
-		int dx = sgn(center.first - wx);
-		int dy = sgn(center.second - wy);
-		int cx = wx + dx;
-		int cy = wy + dy;
+		// Connect Manhattan-style (no diagonal stepping) from wall -> center.
+		// Move entirely along one axis, then along the other. Prefer the longer axis first.
+		int cx = wx;
+		int cy = wy;
+		int dx = center.first - wx;
+		int dy = center.second - wy;
+		int absdx = abs(dx);
+		int absdy = abs(dy);
 
-		while (cx != center.first || cy != center.second) {
-			if (cx < 0 || cx >= width || cy < 0 || cy >= height) break;
+		auto pad_vertical = [&](int x, int y) {
+			if (y - 1 >= 0 && grid[y - 1][x] == ' ') grid[y - 1][x] = TILE_CORRIDOR_WALL;
+			if (y + 1 < height && grid[y + 1][x] == ' ') grid[y + 1][x] = TILE_CORRIDOR_WALL;
+			};
+		auto pad_horizontal = [&](int x, int y) {
+			if (x - 1 >= 0 && grid[y][x - 1] == ' ') grid[y][x - 1] = TILE_CORRIDOR_WALL;
+			if (x + 1 < width && grid[y][x + 1] == ' ') grid[y][x + 1] = TILE_CORRIDOR_WALL;
+			};
 
-			// floor the center line
-			if (grid[cy][cx] != TILE_BOX_WALL) grid[cy][cx] = TILE_FLOOR;
-
-			// maintain corridor side padding perpendicular to movement
-			if (dx != 0) {
-				// moving horizontally: ensure up/down are corridor walls if empty
-				if (cy - 1 >= 0 && grid[cy - 1][cx] == ' ') grid[cy - 1][cx] = TILE_CORRIDOR_WALL;
-				if (cy + 1 < height && grid[cy + 1][cx] == ' ') grid[cy + 1][cx] = TILE_CORRIDOR_WALL;
-			} else if (dy != 0) {
-				// moving vertically: ensure left/right are corridor walls if empty
-				if (cx - 1 >= 0 && grid[cy][cx - 1] == ' ') grid[cy][cx - 1] = TILE_CORRIDOR_WALL;
-				if (cx + 1 < width && grid[cy][cx + 1] == ' ') grid[cy][cx + 1] = TILE_CORRIDOR_WALL;
+		// helper to set a floor cell if we're not opening a box wall
+		auto setFloorIfNotBoxWall = [&](int x, int y) {
+			if (x >= 0 && x < width && y >= 0 && y < height) {
+				if (grid[y][x] != TILE_BOX_WALL) grid[y][x] = TILE_FLOOR;
 			}
+			};
 
-			cx += dx;
-			cy += dy;
+		if (absdx >= absdy) {
+			// horizontal first
+			while (cx != center.first) {
+				cx += (center.first > cx) ? 1 : -1;
+				if (cx < 0 || cx >= width || cy < 0 || cy >= height) break;
+				setFloorIfNotBoxWall(cx, cy);
+				// pad up/down for horizontal movement
+				pad_vertical(cx, cy);
+			}
+			while (cy != center.second) {
+				cy += (center.second > cy) ? 1 : -1;
+				if (cx < 0 || cx >= width || cy < 0 || cy >= height) break;
+				setFloorIfNotBoxWall(cx, cy);
+				// pad left/right for vertical movement
+				pad_horizontal(cx, cy);
+			}
+		}
+		else {
+			// vertical first
+			while (cy != center.second) {
+				cy += (center.second > cy) ? 1 : -1;
+				if (cx < 0 || cx >= width || cy < 0 || cy >= height) break;
+				setFloorIfNotBoxWall(cx, cy);
+				// pad left/right for vertical movement
+				pad_horizontal(cx, cy);
+			}
+			while (cx != center.first) {
+				cx += (center.first > cx) ? 1 : -1;
+				if (cx < 0 || cx >= width || cy < 0 || cy >= height) break;
+				setFloorIfNotBoxWall(cx, cy);
+				// pad up/down for horizontal movement
+				pad_vertical(cx, cy);
+			}
 		}
 
 		// ensure center cell floored and its side padding set
 		if (center.first >= 0 && center.first < width && center.second >= 0 && center.second < height) {
 			if (grid[center.second][center.first] != TILE_BOX_WALL) grid[center.second][center.first] = TILE_FLOOR;
-			// add side padding for center
 			int cx0 = center.first, cy0 = center.second;
 			if (cy0 - 1 >= 0 && grid[cy0 - 1][cx0] == ' ') grid[cy0 - 1][cx0] = TILE_CORRIDOR_WALL;
 			if (cy0 + 1 < height && grid[cy0 + 1][cx0] == ' ') grid[cy0 + 1][cx0] = TILE_CORRIDOR_WALL;
@@ -345,6 +421,10 @@ public:
 	}
 
 	bool tryConnectBoxes(size_t i, size_t j) {
+		if (tryStraightCorridor(i, j)) {
+			return true;
+		}
+
 		int targetJx = boxes[j].x() + boxes[j].width() / 2;
 		int targetJy = boxes[j].y() + boxes[j].height() / 2;
 		auto startWalls = boxes[i].closestEdge(targetJx, targetJy);
@@ -355,68 +435,133 @@ public:
 
 		vector<pair<int,int>> centers;
 
-		// Collect pairs and split into aligned (straight) and non-aligned (L-shaped) attempts.
-		vector<pair<pair<int,int>, pair<int,int>>> alignedPairs;
-		vector<pair<pair<int,int>, pair<int,int>>> lShapedPairs;
-
+		// Try each wall-pair and for *that* pair prefer a straight corridor first,
+		// falling back to the two L-shaped orders only when straight is not possible.
 		for (auto sWall : startWalls) {
 			for (auto eWall : endWalls) {
-				auto sCenter = outsideCenterFromWall(boxes[i], sWall);
-				auto eCenter = outsideCenterFromWall(boxes[j], eWall);
+				auto sCenter = outsideCenterFromWall(boxes[i], sWall, make_pair(targetJx, targetJy));
+				auto eCenter = outsideCenterFromWall(boxes[j], eWall, make_pair(targetIx, targetIy));
 
 				// skip out-of-bounds centers early
 				if (sCenter.first < 0 || sCenter.first >= width || sCenter.second < 0 || sCenter.second >= height) continue;
 				if (eCenter.first < 0 || eCenter.first >= width || eCenter.second < 0 || eCenter.second >= height) continue;
 
+				// If they are aligned, try the straight corridor first for this pair.
 				if (sCenter.second == eCenter.second || sCenter.first == eCenter.first) {
-					alignedPairs.emplace_back(sWall, eWall);
-				} else {
-					lShapedPairs.emplace_back(sWall, eWall);
+					straightCenters(sCenter.first, sCenter.second, eCenter.first, eCenter.second, centers);
+					if (pathFits(centers, i, j, sWall, eWall)) {
+						writeCentersAsCorridor(centers);
+						createOpeningAndConnectWallToCenter(sWall, sCenter);
+						createOpeningAndConnectWallToCenter(eWall, eCenter);
+						return true;
+					}
+					// If straight failed for this pair, still try L-shaped orders for same pair below.
+				}
+
+				// Not aligned, or straight attempt failed — try L-shaped for this pair.
+				int horizLen = abs(sCenter.first - eCenter.first);
+				int vertLen  = abs(sCenter.second - eCenter.second);
+
+				// prefer the L-order that yields the longer initial straight leg
+				int firstOrder = (horizLen >= vertLen) ? 0 : 1;
+				int orders[2] = { firstOrder, 1 - firstOrder };
+
+				for (int k = 0; k < 2; k++) {
+					bool horizontalFirst = (orders[k] == 0);
+					lShapedCorridor(sCenter.first, sCenter.second, eCenter.first, eCenter.second, horizontalFirst, centers);
+					if (pathFits(centers, i, j, sWall, eWall)) {
+						writeCentersAsCorridor(centers);
+						createOpeningAndConnectWallToCenter(sWall, sCenter);
+						createOpeningAndConnectWallToCenter(eWall, eCenter);
+						return true;
+					}
 				}
 			}
 		}
 
-		// First attempt: all straight (aligned) pairs
-		for (const auto &pairWalls : alignedPairs) {
-			auto sWall = pairWalls.first;
-			auto eWall = pairWalls.second;
-			auto sCenter = outsideCenterFromWall(boxes[i], sWall);
-			auto eCenter = outsideCenterFromWall(boxes[j], eWall);
+		return false;
+	}
 
-			straightCenters(sCenter.first, sCenter.second, eCenter.first, eCenter.second, centers);
-			if (pathFits(centers, i, j, sWall, eWall)) {
-				writeCentersAsCorridor(centers);
-				createOpeningAndConnectWallToCenter(sWall, sCenter);
-				createOpeningAndConnectWallToCenter(eWall, eCenter);
-				return true;
-			}
-		}
+	bool tryStraightCorridor(size_t i, size_t j) {
+		const Box& A = boxes[i];
+		const Box& B = boxes[j];
 
-		// Second attempt: L-shaped pairs. Try the order that produces the longer first straight leg first.
-		for (const auto &pairWalls : lShapedPairs) {
-			auto sWall = pairWalls.first;
-			auto eWall = pairWalls.second;
-			auto sCenter = outsideCenterFromWall(boxes[i], sWall);
-			auto eCenter = outsideCenterFromWall(boxes[j], eWall);
+		pair<int,int> ac = make_pair(A.x() + A.width() / 2,  A.y() + A.height() / 2);
+		pair<int,int> bc = make_pair(B.x() + B.width() / 2,  B.y() + B.height() / 2);
 
-			int horizLen = abs(sCenter.first - eCenter.first);
-			int vertLen  = abs(sCenter.second - eCenter.second);
+		vector<pair<int,int>> centers;
 
-			// prefer the L-order that yields the longer initial straight leg
-			int firstOrder = (horizLen >= vertLen) ? 0 : 1;
-			int orders[2] = { firstOrder, 1 - firstOrder };
+		// Try horizontal straight corridors (left/right facing) over the overlapping Y-span.
+		auto tryHorizontal = [&](size_t leftIdx, size_t rightIdx)->bool {
+			const Box& L = boxes[leftIdx];
+			const Box& R = boxes[rightIdx];
+			// ensure L is strictly left of R
+			if (L.x() + L.width() - 1 >= R.x()) return false;
 
-			for (int k = 0; k < 2; k++) {
-				bool horizontalFirst = (orders[k] == 0);
-				lShapedCorridor(sCenter.first, sCenter.second, eCenter.first, eCenter.second, horizontalFirst, centers);
-				if (pathFits(centers, i, j, sWall, eWall)) {
+			int yLow  = max(L.y() + 1, R.y() + 1);
+			int yHigh = min(L.y() + L.height() - 2, R.y() + R.height() - 2);
+			if (yLow > yHigh) return false;
+
+			// scan the whole overlap; first valid straight path wins
+			for (int y = yLow; y <= yHigh; ++y) {
+				pair<int,int> sWall = make_pair(L.x() + L.width() - 1, y);
+				pair<int,int> eWall = make_pair(R.x(), y);
+
+				auto sCenter = outsideCenterFromWall(L, sWall, bc);
+				auto eCenter = outsideCenterFromWall(R, eWall, ac);
+
+				// bounds guard
+				if (sCenter.first < 0 || sCenter.first >= width || sCenter.second < 0 || sCenter.second >= height) continue;
+				if (eCenter.first < 0 || eCenter.first >= width || eCenter.second < 0 || eCenter.second >= height) continue;
+
+				straightCenters(sCenter.first, sCenter.second, eCenter.first, eCenter.second, centers);
+				if (pathFits(centers, leftIdx, rightIdx, sWall, eWall)) {
 					writeCentersAsCorridor(centers);
 					createOpeningAndConnectWallToCenter(sWall, sCenter);
 					createOpeningAndConnectWallToCenter(eWall, eCenter);
 					return true;
 				}
 			}
-		}
+			return false;
+		};
+
+		// Try vertical straight corridors (top/bottom facing) over the overlapping X-span.
+		auto tryVertical = [&](size_t topIdx, size_t bottomIdx)->bool {
+			const Box& T = boxes[topIdx];
+			const Box& D = boxes[bottomIdx];
+			// ensure T is strictly above D
+			if (T.y() + T.height() - 1 >= D.y()) return false;
+
+			int xLow  = max(T.x() + 1, D.x() + 1);
+			int xHigh = min(T.x() + T.width() - 2, D.x() + D.width() - 2);
+			if (xLow > xHigh) return false;
+
+			for (int x = xLow; x <= xHigh; ++x) {
+				pair<int,int> sWall = make_pair(x, T.y() + T.height() - 1);
+				pair<int,int> eWall = make_pair(x, D.y());
+
+				auto sCenter = outsideCenterFromWall(T, sWall, bc);
+				auto eCenter = outsideCenterFromWall(D, eWall, ac);
+
+				if (sCenter.first < 0 || sCenter.first >= width || sCenter.second < 0 || sCenter.second >= height) continue;
+				if (eCenter.first < 0 || eCenter.first >= width || eCenter.second < 0 || eCenter.second >= height) continue;
+
+				straightCenters(sCenter.first, sCenter.second, eCenter.first, eCenter.second, centers);
+				if (pathFits(centers, topIdx, bottomIdx, sWall, eWall)) {
+					writeCentersAsCorridor(centers);
+					createOpeningAndConnectWallToCenter(sWall, sCenter);
+					createOpeningAndConnectWallToCenter(eWall, eCenter);
+					return true;
+				}
+			}
+			return false;
+		};
+
+		// orientation checks
+		if (A.x() + A.width() - 1 < B.x())         { if (tryHorizontal(i, j)) return true; }
+		if (B.x() + B.width() - 1 < A.x())         { if (tryHorizontal(j, i)) return true; }
+		if (A.y() + A.height() - 1 < B.y())        { if (tryVertical(i, j))   return true; }
+		if (B.y() + B.height() - 1 < A.y())        { if (tryVertical(j, i))   return true; }
 
 		return false;
 	}
@@ -429,7 +574,7 @@ public:
 		srand(static_cast<unsigned int>(time(nullptr)));
 
 		// We'll try a few times to generate a layout where every box ends up with degree 1 or 2.
-		const int maxGenerationAttempts = 12;
+		const int maxGenerationAttempts = 20;
 		bool success = false;
 
 		for (int genAttempt = 0; genAttempt < maxGenerationAttempts && !success; ++genAttempt) {
@@ -448,7 +593,7 @@ public:
 
 					bool overlapping = false;
 					for (const Box& existingBox : boxes) {
-						if (newBox.intersects(existingBox, 1)) {
+						if (newBox.intersects(existingBox, 2)) {
 							overlapping = true;
 							break;
 						}
