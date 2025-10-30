@@ -8,6 +8,7 @@
 #include <utility>
 #include <unordered_set>
 #include <cmath>
+#include <string>
 
 using namespace std;
 
@@ -195,18 +196,104 @@ public:
 	}
 };
 
+class Enemy {
+	int ax;
+	int ay;
+public:
+	Enemy() : ax(-1), ay(-1) {}
+
+	void reset() { ax = -1; ay = -1; }
+
+	void placeAt(int x, int y) { ax = x; ay = y; }
+
+	// Accessors
+	int x() const { return ax; }
+	int y() const { return ay; }
+	bool isPlaced() const { return ax >= 0 && ay >= 0; }
+
+	// Move one step toward target (tx,ty) on floor; optionally avoid landing on a forbidden tile (e.g., player's current).
+	void stepToward(int tx, int ty, const vector<vector<char>>& grid, int forbidX = -1, int forbidY = -1) {
+		if (!isPlaced()) return;
+		int h = static_cast<int>(grid.size());
+		int w = h ? static_cast<int>(grid[0].size()) : 0;
+		auto canMove = [&](int nx, int ny) -> bool {
+			return nx >= 0 && ny >= 0 && nx < w && ny < h && grid[ny][nx] == TILE_FLOOR;
+		};
+
+		int dx = tx - ax;
+		int dy = ty - ay;
+		int stepx = (dx == 0) ? 0 : (dx > 0 ? 1 : -1);
+		int stepy = (dy == 0) ? 0 : (dy > 0 ? 1 : -1);
+
+		auto tryMove = [&](int nx, int ny) -> bool {
+			if (!canMove(nx, ny)) return false;
+			if (forbidX >= 0 && forbidY >= 0 && nx == forbidX && ny == forbidY) return false;
+			ax = nx; ay = ny;
+			return true;
+		};
+
+		if (abs(dx) >= abs(dy)) {
+			if (stepx != 0 && tryMove(ax + stepx, ay)) return;
+			if (stepy != 0) tryMove(ax, ay + stepy);
+		} else {
+			if (stepy != 0 && tryMove(ax, ay + stepy)) return;
+			if (stepx != 0) tryMove(ax + stepx, ay);
+		}
+	}
+
+	// Place at the center of a random box that does NOT contain the player and is NOT the exit box (exit is centered).
+	void placeInRandomBoxCenter(const vector<Box>& boxes,
+	                            int playerX, int playerY,
+	                            const Exit& exitTile,
+	                            const vector<vector<char>>& grid)
+	{
+		vector<int> candidates;
+		int h = static_cast<int>(grid.size());
+		int w = h ? static_cast<int>(grid[0].size()) : 0;
+
+		for (size_t i = 0; i < boxes.size(); ++i) {
+			const Box& b = boxes[i];
+			int cx = b.x() + b.width() / 2;
+			int cy = b.y() + b.height() / 2;
+
+			// inside bounds and on a floor tile
+			if (cx < 0 || cy < 0 || cx >= w || cy >= h) continue;
+			if (grid[cy][cx] != TILE_FLOOR) continue;
+
+			// exclude any box containing the player
+			if (b.contains(playerX, playerY)) continue;
+
+			// exclude the exit box (exit is always placed at a box center)
+			if (exitTile.isAt(cx, cy)) continue;
+
+			candidates.push_back(static_cast<int>(i));
+		}
+
+		if (!candidates.empty()) {
+			int idx = candidates[rand() % candidates.size()];
+			const Box& b = boxes[static_cast<size_t>(idx)];
+			ax = b.x() + b.width() / 2;
+			ay = b.y() + b.height() / 2;
+		} else {
+			reset();
+		}
+	}
+
+	bool isAt(int x, int y) const { return x == ax && y == ay; }
+};
+
 class Game {
 	bool gameOver;
 	int width;
 	int height;
+	int boxNumber;
 	int playerX, playerY;
 	Direction dir;
 	vector<Box> boxes;
 	vector<vector<char>> grid;
 
-	const int boxNumber = 10;
-	const int minBoxWidth = 8;
-	const int maxBoxWidth = 20;
+	const int minBoxWidth = 7;
+	const int maxBoxWidth = 12;
 	const int minBoxHeight = 5;
 	const int maxBoxHeight = 8;
 
@@ -214,15 +301,21 @@ class Game {
 	const int gapFromBox = 1;      // buffer between box wall and corridor boundary (kept moderate)
 
 	Exit exitTile;
+	Enemy enemy;
 
 	// Leveling
 	int level;
+	int gold;
+
 	static const int MAX_WIDTH = 110;
 	static const int MAX_HEIGHT = 25;
+	static const int MAX_BOXES = 14;
+
+	vector<vector<bool>> revealedAreas;
 
 public:
-	Game(int width = 60, int height = 15)
-		: gameOver(false), width(width), height(height), playerX(0), playerY(0), dir(STOP), level(1) {
+	Game(int width = 60, int height = 15, int boxNumber = 4)
+		: gameOver(false), width(width), height(height), boxNumber(boxNumber), playerX(0), playerY(0), dir(STOP), level(1), gold(0) {
 		grid.assign(height, vector<char>(width, ' '));
 	}
 
@@ -235,6 +328,57 @@ public:
 		for (int i = 0; i < height; i++)
 			for (int j = 0; j < width; j++)
 				grid[i][j] = ' ';
+	}
+
+	int boxIndexForInterior(int x, int y) const {
+		for (size_t i = 0; i < boxes.size(); ++i) {
+			if (boxes[i].interiorContains(x, y)) {
+				return static_cast<int>(i);
+			}
+		}
+		return -1;
+	}
+
+	void revealBox(const Box& box) {
+		int startX = box.x(), startY = box.y();
+		int enxX = startX + box.width() - 1, endY = startY + box.height() - 1;
+		for (int y = max(0, startY); y <= min(height - 1, endY); ++y) {
+			for (int x = max(0, startX); x <= min(width - 1, enxX); ++x) {
+				revealedAreas[y][x] = true;
+			}
+		}
+	}
+
+	void revealCorridorTile(int x, int y) {
+		if (x < 0 || x >= width || y < 0 || y >= height) return;
+		revealedAreas[y][x] = true;
+
+		static const int dx[4] = { -1, 1, 0, 0 };
+		static const int dy[4] = { 0, 0, -1, 1 };
+		for (int k = 0; k < 4; ++k) {
+			int nx = x + dx[k];
+			int ny = y + dy[k];
+			if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+			char c = grid[ny][nx];
+			if (c == TILE_CORRIDOR_WALL || c == TILE_BOX_WALL) {
+				revealedAreas[ny][nx] = true;
+			}
+			else if (c == TILE_FLOOR) {
+				if (boxIndexForInterior(nx, ny) < 0) {
+					revealedAreas[ny][nx] = true;
+				}
+			}
+		}
+	}
+
+	void revealCurrentSection() {
+		if (playerX < 0 || playerX >= width || playerY < 0 || playerY >= height) return;
+		int boxIndex = boxIndexForInterior(playerX, playerY);
+		if (boxIndex >= 0) {
+			revealBox(boxes[static_cast<size_t>(boxIndex)]);
+		} else if (grid[playerY][playerX] == TILE_FLOOR) {
+			revealCorridorTile(playerX, playerY);
+		}
 	}
 
 	pair<int,int> outsideCenterFromWall(const Box& b, pair<int,int> wall, pair<int,int> target) const {
@@ -943,13 +1087,26 @@ public:
 			int ey = boxes[exitBoxIdx].y() + boxes[exitBoxIdx].height() / 2;
 			exitTile.placeAt(ex, ey);
 		}
+
+		// Place enemy at center of a box that doesn't contain the player or exit
+		enemy.placeInRandomBoxCenter(boxes, playerX, playerY, exitTile, grid);
+
+		revealedAreas.assign(height, vector<bool>(width, false));
+		revealCurrentSection();
 	}
 
 	void Draw() const {
 		system("cls");
 
 		// HUD
-		cout << "Level " << level << endl;
+		string hudLeft = "Level " + to_string(level);
+		string hudRight = "Gold: " + to_string(gold);
+		int total = width + 2;
+		int spaces = total - static_cast<int>(hudLeft.size()) - static_cast<int>(hudRight.size());
+		if (spaces < 1) {
+			spaces = 1;
+		}
+		cout << hudLeft << string(spaces, ' ') << hudRight << endl;
 
 		// Top border
 		for(int i=0;i<width+2; i++)
@@ -964,8 +1121,14 @@ public:
 				if (i == playerY && j == playerX) {
 					cout << "O"; // Player position
 				}
+				else if (!revealedAreas[i][j]) {
+					cout << " "; // Unrevealed area
+				}
+				else if (enemy.isAt(j, i)) {
+					cout << "A"; // Enemy
+				}
 				else if (exitTile.isAt(j, i)) {
-					cout << "x"; // Exit tile (center of a different box)
+					cout << "X"; // Exit tile (center of a different box)
 				}
 				else {
 					char c = grid[i][j];
@@ -1011,14 +1174,20 @@ public:
 	}
 
 	void nextLevel() {
-		// Increase level and grow the map size up to the configured maximums.
+		// Increase level and gold and grow the map size up to the configured maximums.
+		gold++;
 		level++;
 		width  = min(MAX_WIDTH,  width  + 5);
 		height = min(MAX_HEIGHT, height + 1);
+		boxNumber = min(MAX_BOXES, boxNumber + 1);
+
 		Setup();
 	}
 
 	void Logic() {
+		int prevX = playerX;
+		int prevY = playerY;
+
 		int newX = playerX;
 		int newY = playerY;
 
@@ -1042,6 +1211,22 @@ public:
 		if (isPassableCorridor(newX, newY)) {
 			playerX = newX;
 			playerY = newY;
+		}
+
+		if (playerX != prevX || playerY != prevY) {
+			revealCurrentSection();
+		}
+
+		// If player moved and is in the same box as the enemy, move enemy one step toward the player's previous position,
+		// but never onto the player's current tile.
+		bool playerMoved = (playerX != prevX) || (playerY != prevY);
+		if (playerMoved && enemy.isPlaced()) {
+			for (const auto& b : boxes) {
+				if (b.contains(playerX, playerY) && b.contains(enemy.x(), enemy.y())) {
+					enemy.stepToward(prevX, prevY, grid, playerX, playerY);
+					break;
+				}
+			}
 		}
 
 		// Level up on exit
