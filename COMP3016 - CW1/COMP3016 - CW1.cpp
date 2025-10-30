@@ -117,7 +117,7 @@ public:
 
 	void drawBox(vector<vector<char>>& grid) const {
 		int height = static_cast<int>(grid.size());
-		int width = static_cast<int>(grid[0].size());
+		int width = height ? static_cast<int>(grid[0].size()) : 0;
 		for (int i = 0; i < boxHeight; ++i) {
 			for (int j = 0; j < boxWidth; ++j) {
 				int gridY = boxY + i;
@@ -193,6 +193,87 @@ public:
 		sort(edges.begin(), edges.end());
 		edges.erase(unique(edges.begin(), edges.end()), edges.end());
 		return edges;
+	}
+};
+
+// NEW: Gold class to place 'G' at centers of boxes with exactly one corridor
+class Gold {
+	vector<pair<int,int>> positions;
+
+	static int countCorridorOpenings(const Box& b, const vector<vector<char>>& grid) {
+		int x0 = b.x();
+		int y0 = b.y();
+		int x1 = x0 + b.width() - 1;
+		int y1 = y0 + b.height() - 1;
+		int count = 0;
+
+		// Top and bottom edges
+		for (int x = x0; x <= x1; ++x) {
+			if (y0 >= 0 && y0 < (int)grid.size() && x >= 0 && x < (int)grid[0].size()) {
+				if (grid[y0][x] == TILE_FLOOR) count++;
+			}
+			if (y1 >= 0 && y1 < (int)grid.size() && x >= 0 && x < (int)grid[0].size()) {
+				if (grid[y1][x] == TILE_FLOOR) count++;
+			}
+		}
+		// Left and right edges (exclude corners to avoid double counting)
+		for (int y = y0 + 1; y <= y1 - 1; ++y) {
+			if (y >= 0 && y < (int)grid.size()) {
+				if (x0 >= 0 && x0 < (int)grid[0].size()) {
+					if (grid[y][x0] == TILE_FLOOR) count++;
+				}
+				if (x1 >= 0 && x1 < (int)grid[0].size()) {
+					if (grid[y][x1] == TILE_FLOOR) count++;
+				}
+			}
+		}
+		return count;
+	}
+
+public:
+	void clear() { positions.clear(); }
+
+	// Place 'G' at centers of boxes that have exactly one corridor opening.
+	// Avoid placing on the player's current tile or the exit tile.
+	void placeForDeadEnds(const vector<Box>& boxes,
+	                      const vector<vector<char>>& grid,
+	                      const Exit& exitTile,
+	                      int avoidX, int avoidY)
+	{
+		positions.clear();
+		int h = static_cast<int>(grid.size());
+		int w = h ? static_cast<int>(grid[0].size()) : 0;
+
+		for (const auto& b : boxes) {
+			int openings = countCorridorOpenings(b, grid);
+			if (openings == 1) {
+				int cx = b.x() + b.width() / 2;
+				int cy = b.y() + b.height() / 2;
+				if (cx < 0 || cy < 0 || cx >= w || cy >= h) continue;
+				if (grid[cy][cx] != TILE_FLOOR) continue; // center should be floor
+				if (exitTile.isAt(cx, cy)) continue;
+				if (cx == avoidX && cy == avoidY) continue;
+				positions.emplace_back(cx, cy);
+			}
+		}
+	}
+
+	bool isAt(int x, int y) const {
+		for (const auto& p : positions) {
+			if (p.first == x && p.second == y) return true;
+		}
+		return false;
+	}
+
+	// NEW: Try to pick up gold at a position. Returns true if there was gold and it was removed.
+	bool tryPickup(int x, int y) {
+		for (size_t i = 0; i < positions.size(); ++i) {
+			if (positions[i].first == x && positions[i].second == y) {
+				positions.erase(positions.begin() + static_cast<long long>(i));
+				return true;
+			}
+		}
+		return false;
 	}
 };
 
@@ -301,7 +382,12 @@ class Game {
 	const int gapFromBox = 1;      // buffer between box wall and corridor boundary (kept moderate)
 
 	Exit exitTile;
-	Enemy enemy;
+
+	// CHANGED: multiple enemies
+	vector<Enemy> enemies;
+
+	// Gold placer
+	Gold goldItems;
 
 	// Leveling
 	int level;
@@ -1088,11 +1174,37 @@ public:
 			exitTile.placeAt(ex, ey);
 		}
 
-		// Place enemy at center of a box that doesn't contain the player or exit
-		enemy.placeInRandomBoxCenter(boxes, playerX, playerY, exitTile, grid);
+		// Place 'G' in centers of boxes with exactly one corridor (dead-ends), avoiding player and exit tiles
+		goldItems.placeForDeadEnds(boxes, grid, exitTile, playerX, playerY);
+
+		// NEW: Spawn an enemy in every box that doesn't contain Gold, Player, or Exit
+		enemies.clear();
+		for (const auto& b : boxes) {
+			int cx = b.x() + b.width() / 2;
+			int cy = b.y() + b.height() / 2;
+
+			// must be a valid floor center
+			if (cy < 0 || cy >= height || cx < 0 || cx >= width) continue;
+			if (grid[cy][cx] != TILE_FLOOR) continue;
+
+			// exclude player's box center position, exit, and gold
+			if (b.contains(playerX, playerY) && (playerX == cx && playerY == cy)) continue;
+			if (exitTile.isAt(cx, cy)) continue;
+			if (goldItems.isAt(cx, cy)) continue;
+
+			Enemy e;
+			e.placeAt(cx, cy);
+			enemies.push_back(e);
+		}
 
 		revealedAreas.assign(height, vector<bool>(width, false));
 		revealCurrentSection();
+	}
+
+	// Helper: any enemy at x,y
+	bool anyEnemyAt(int x, int y) const {
+		for (const auto& e : enemies) if (e.isAt(x, y)) return true;
+		return false;
 	}
 
 	void Draw() const {
@@ -1124,11 +1236,14 @@ public:
 				else if (!revealedAreas[i][j]) {
 					cout << " "; // Unrevealed area
 				}
-				else if (enemy.isAt(j, i)) {
+				else if (anyEnemyAt(j, i)) {
 					cout << "A"; // Enemy
 				}
 				else if (exitTile.isAt(j, i)) {
 					cout << "X"; // Exit tile (center of a different box)
+				}
+				else if (goldItems.isAt(j, i)) {
+					cout << "G"; // Gold in dead-end rooms
 				}
 				else {
 					char c = grid[i][j];
@@ -1148,6 +1263,10 @@ public:
 		for (int i = 0; i < width + 2; i++)
 			cout << "#";
 		cout << endl;
+
+		cout << "Controls: W/A/S/D to move, X to exit" << endl;
+		cout << "Reach the exit (X) to advance levels and earn more gold!" << endl;
+		cout << "Be on the lookout for adversaries (A) in your way and don't forget to pick up any gold (G) you find!" << endl;
 	}
 
 	void Input() {
@@ -1188,21 +1307,28 @@ public:
 		int prevX = playerX;
 		int prevY = playerY;
 
+		int targetX = playerX;
+		int targetY = playerY;
+
 		int newX = playerX;
 		int newY = playerY;
 
 		switch (dir) {
 			case LEFT:
 				newX = playerX - 1;
+				targetX = newX - 1;
 				break;
 			case RIGHT:
 				newX = playerX + 1;
+				targetX = newX + 1;
 				break;
 			case UP:
 				newY = playerY - 1;
+				targetY = newY - 1;
 				break;
 			case DOWN:
 				newY = playerY + 1;
+				targetY = newY + 1;
 				break;
 			default:
 				return;
@@ -1217,16 +1343,24 @@ public:
 			revealCurrentSection();
 		}
 
-		// If player moved and is in the same box as the enemy, move enemy one step toward the player's previous position,
+		// If player moved and is in the same box as an enemy, move that enemy one step toward the player's previous position,
 		// but never onto the player's current tile.
 		bool playerMoved = (playerX != prevX) || (playerY != prevY);
-		if (playerMoved && enemy.isPlaced()) {
-			for (const auto& b : boxes) {
-				if (b.contains(playerX, playerY) && b.contains(enemy.x(), enemy.y())) {
-					enemy.stepToward(prevX, prevY, grid, playerX, playerY);
-					break;
+		if (playerMoved) {
+			for (auto& e : enemies) {
+				if (!e.isPlaced()) continue;
+				for (const auto& b : boxes) {
+					if (b.contains(playerX, playerY) && b.contains(e.x(), e.y())) {
+						e.stepToward(targetX, targetY, grid, playerX, playerY);
+						break;
+					}
 				}
 			}
+		}
+
+		// Pick up gold if standing on it
+		if (goldItems.tryPickup(playerX, playerY)) {
+			gold += 2;
 		}
 
 		// Level up on exit
