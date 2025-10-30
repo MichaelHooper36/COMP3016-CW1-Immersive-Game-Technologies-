@@ -58,7 +58,6 @@ public:
 	bool isAt(int x, int y) const { return x == ex && y == ey; }
 };
 
-
 class Box {
 	int boxX;
 	int boxY;
@@ -66,7 +65,8 @@ class Box {
 	int boxHeight;
 public:
 	Box(int boxWidths = 12, int boxHeights = 4)
-		: boxX(0), boxY(0), boxWidth(boxWidths), boxHeight(boxHeights) {}
+		: boxX(0), boxY(0), boxWidth(boxWidths), boxHeight(boxHeights) {
+	}
 
 	void placeAt(int x, int y) {
 		boxX = x;
@@ -94,11 +94,11 @@ public:
 		}
 	}
 
-	int x() const { 
-		return boxX; 
+	int x() const {
+		return boxX;
 	}
-	int y() const { 
-		return boxY; 
+	int y() const {
+		return boxY;
 	}
 	int width() const {
 		return boxWidth;
@@ -196,6 +196,488 @@ public:
 	}
 };
 
+class Enemy {
+	int ax;
+	int ay;
+
+	// Stats
+	int maxHealth;
+	int currentHealth;
+	int defense;
+	int strength;
+	int speed; // NEW: movement speed
+
+public:
+	// Default all stats to 5; health starts full; speed defaults to 5
+	Enemy(int h = 5, int d = 5, int s = 5, int sp = 5)
+		: ax(-1), ay(-1), maxHealth(h), currentHealth(h), defense(d), strength(s), speed(sp) {
+	}
+
+	void reset() { ax = -1; ay = -1; }
+
+	void placeAt(int x, int y) { ax = x; ay = y; }
+
+	// Accessors - position
+	int x() const { return ax; }
+	int y() const { return ay; }
+	bool isPlaced() const { return ax >= 0 && ay >= 0; }
+
+	// Accessors - stats
+	int getMaxHealth() const { return maxHealth; }
+	int getCurrentHealth() const { return currentHealth; }
+	int getDefense() const { return defense; }
+	int getStrength() const { return strength; }
+	int getSpeed() const { return speed; } // NEW
+
+	// Optional setters
+	void setMaxHealth(int mh) {
+		maxHealth = max(0, mh);
+		currentHealth = min(currentHealth, maxHealth);
+	}
+	void setCurrentHealth(int ch) { currentHealth = max(0, min(ch, maxHealth)); }
+	void setDefense(int d) { defense = d; }
+	void setStrength(int s) { strength = s; }
+	void setSpeed(int sp) { speed = sp; } // NEW
+
+	// Healing helpers
+	void heal(int amount) { setCurrentHealth(currentHealth + max(0, amount)); }
+	void healToFull() { currentHealth = maxHealth; }
+
+	// Apply damage reduced by defense; returns damage actually taken
+	int applyDamage(int rawDamage) {
+		int dmg = max(0, rawDamage - defense);
+		currentHealth = max(0, currentHealth - dmg);
+		return dmg;
+	}
+	bool isDead() const { return currentHealth <= 0; }
+
+	// Move one step toward target (tx,ty) on floor; optionally avoid landing on a forbidden tile (e.g., player's current).
+	void stepToward(int tx, int ty, const vector<vector<char>>& grid, int forbidX = -1, int forbidY = -1) {
+		if (!isPlaced()) return;
+		int h = static_cast<int>(grid.size());
+		int w = h ? static_cast<int>(grid[0].size()) : 0;
+		auto canMove = [&](int nx, int ny) -> bool {
+			return nx >= 0 && ny >= 0 && nx < w && ny < h && grid[ny][nx] == TILE_FLOOR;
+			};
+
+		int dx = tx - ax;
+		int dy = ty - ay;
+		int stepx = (dx == 0) ? 0 : (dx > 0 ? 1 : -1);
+		int stepy = (dy == 0) ? 0 : (dy > 0 ? 1 : -1);
+
+		auto tryMove = [&](int nx, int ny) -> bool {
+			if (!canMove(nx, ny)) return false;
+			if (forbidX >= 0 && forbidY >= 0 && nx == forbidX && ny == forbidY) return false;
+			ax = nx; ay = ny;
+			return true;
+			};
+
+		if (abs(dx) >= abs(dy)) {
+			if (stepx != 0 && tryMove(ax + stepx, ay)) return;
+			if (stepy != 0) tryMove(ax, ay + stepy);
+		}
+		else {
+			if (stepy != 0 && tryMove(ax, ay + stepy)) return;
+			if (stepx != 0) tryMove(ax + stepx, ay);
+		}
+	}
+
+	// Place at the center of a random box that does NOT contain the player and is NOT the exit box (exit is centered).
+	void placeInRandomBoxCenter(const vector<Box>& boxes, int playerX, int playerY, const Exit& exitTile, const vector<vector<char>>& grid)
+	{
+		vector<int> candidates;
+		int h = static_cast<int>(grid.size());
+		int w = h ? static_cast<int>(grid[0].size()) : 0;
+
+		for (size_t i = 0; i < boxes.size(); ++i) {
+			const Box& b = boxes[i];
+			int cx = b.x() + b.width() / 2;
+			int cy = b.y() + b.height() / 2;
+
+			// inside bounds and on a floor tile
+			if (cx < 0 || cy < 0 || cx >= w || cy >= h) continue;
+			if (grid[cy][cx] != TILE_FLOOR) continue;
+
+			// exclude any box containing the player
+			if (b.contains(playerX, playerY)) continue;
+
+			// exclude the exit box (exit is always placed at a box center)
+			if (exitTile.isAt(cx, cy)) continue;
+
+			candidates.push_back(static_cast<int>(i));
+		}
+
+		if (!candidates.empty()) {
+			int idx = candidates[rand() % candidates.size()];
+			const Box& b = boxes[static_cast<size_t>(idx)];
+			ax = b.x() + b.width() / 2;
+			ay = b.y() + b.height() / 2;
+		}
+		else {
+			reset();
+		}
+	}
+
+	bool isAt(int x, int y) const { return x == ax && y == ay; }
+
+	void enemyDifficultyIncrease() {
+		maxHealth++;
+		currentHealth = maxHealth;
+		defense++;
+		strength++;
+		speed++;
+	}
+};
+
+class Player {
+	int x;
+	int y;
+
+	int maxHealth;
+	int currentHealth;
+	int defense;
+	int strength;
+	int speed; // NEW: movement speed
+
+public:
+	// Speed defaults to 5
+	Player(int h = 5, int d = 3, int s = 6, int sp = 5)
+		: x(0), y(0), maxHealth(h), currentHealth(h), defense(d), strength(s), speed(sp) {
+	}
+
+	// Position
+	int getX() const { return x; }
+	int getY() const { return y; }
+	void setX(int nx) { x = nx; }
+	void setY(int ny) { y = ny; }
+	void setPosition(int nx, int ny) { x = nx; y = ny; }
+
+	// Stats
+	int getMaxHealth() const { return maxHealth; }
+	int getCurrentHealth() const { return currentHealth; }
+	int getDefense() const { return defense; }
+	int getStrength() const { return strength; }
+	int getSpeed() const { return speed; } // NEW
+
+	void setMaxHealth(int mh) {
+		maxHealth = max(0, mh);
+		currentHealth = min(currentHealth, maxHealth);
+	}
+	void setCurrentHealth(int ch) { currentHealth = max(0, min(ch, maxHealth)); }
+	void setDefense(int d) { defense = d; }
+	void setStrength(int s) { strength = s; }
+	void setSpeed(int sp) { speed = sp; } // NEW
+
+	// Healing helpers
+	void heal(int amount) { setCurrentHealth(currentHealth + max(0, amount)); }
+	void healToFull() { currentHealth = maxHealth; }
+
+	// Damage helper
+	int applyDamage(int rawDamage) {
+		int dmg = max(0, rawDamage - defense);
+		currentHealth = max(0, currentHealth - dmg);
+		return dmg;
+	}
+
+	bool isDead() const { return currentHealth <= 0; }
+};
+
+class Combat {
+public:
+	// Shows a modal "combat screen" in the SAME console window, then returns.
+	void OpenModal(const wchar_t* title = L"Combat",
+	               const wchar_t* message = L"You made contact with an enemy!\nPress Esc/Enter/Space to continue.")
+	{
+		// Clear current console frame
+		system("cls");
+
+		// Query console size to format a bordered screen
+		HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+		CONSOLE_SCREEN_BUFFER_INFO csbi{};
+		int cols = 80, rows = 25;
+		if (GetConsoleScreenBufferInfo(hOut, &csbi)) {
+			cols = csbi.srWindow.Right - csbi.srWindow.Left + 1;
+			rows = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+		}
+
+		auto border = std::wstring(static_cast<size_t>(cols), L'#');
+		auto printCentered = [&](const std::wstring& s) {
+			int pad = max(0, (cols - static_cast<int>(s.size())) / 2);
+			std::wcout << std::wstring(static_cast<size_t>(pad), L' ') << s << L"\n";
+		};
+
+		std::wcout << border << L"\n";
+		printCentered(title ? title : L"Combat");
+		std::wcout << L"\n";
+
+		// Split message on '\n' and center each line
+		std::wstring msg = message ? message : L"";
+		size_t start = 0;
+		while (start <= msg.size()) {
+			size_t pos = msg.find(L'\n', start);
+			std::wstring line = msg.substr(start, (pos == std::wstring::npos) ? std::wstring::npos : pos - start);
+			printCentered(line);
+			if (pos == std::wstring::npos) break;
+			start = pos + 1;
+		}
+
+		std::wcout << L"\n";
+		printCentered(L"[Esc]  [Enter]  [Space] to continue");
+		std::wcout << border << L"\n";
+		std::wcout.flush();
+
+		// Wait for a key without echoing
+		for (;;) {
+			int ch = _getch();
+			if (ch == 27 || ch == 13 || ch == ' ') break; // ESC / ENTER / SPACE
+		}
+
+		// Drain any extra buffered keystrokes to avoid affecting the game loop
+		while (_kbhit()) { (void)_getch(); }
+
+		// Let the game redraw its next frame
+	}
+
+	// NEW: Full battle that alternates attacks and updates health.
+	// Damage equals the attacker's strength (ignores defense by requirement).
+	void OpenBattle(Player& player, Enemy& enemy) {
+		// Build combat transcript
+		std::vector<std::wstring> lines;
+
+		bool playerTurn = (player.getSpeed() > enemy.getSpeed()) ? true : false; // enemy starts unless player is faster
+
+		while (!player.isDead() && !enemy.isDead()) {
+			if (playerTurn) {
+				int dmg = max(0, player.getStrength());
+				int newHP = max(0, enemy.getCurrentHealth() - dmg);
+				enemy.setCurrentHealth(newHP);
+
+				lines.push_back(L"Player hits Enemy for " + std::to_wstring(dmg) +
+				                L". Enemy health: " + std::to_wstring(newHP) +
+				                L"/" + std::to_wstring(enemy.getMaxHealth()));
+			} else {
+				int dmg = max(0, enemy.getStrength());
+				int newHP = max(0, player.getCurrentHealth() - dmg);
+				player.setCurrentHealth(newHP);
+
+				lines.push_back(L"Enemy hits Player for " + std::to_wstring(dmg) +
+				                L". Player health: " + std::to_wstring(newHP) +
+				                L"/" + std::to_wstring(player.getMaxHealth()));
+			}
+			playerTurn = !playerTurn;
+		}
+
+		if (enemy.isDead()) {
+			lines.push_back(L"Enemy defeated!");
+		} else if (player.isDead()) {
+			lines.push_back(L"You were defeated!");
+		}
+
+		// Render modal screen with transcript
+		system("cls");
+
+		HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+		CONSOLE_SCREEN_BUFFER_INFO csbi{};
+		int cols = 80, rows = 25;
+		if (GetConsoleScreenBufferInfo(hOut, &csbi)) {
+			cols = csbi.srWindow.Right - csbi.srWindow.Left + 1;
+			rows = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+		}
+
+		auto border = std::wstring(static_cast<size_t>(cols), L'#');
+		auto printCentered = [&](const std::wstring& s) {
+			int pad = max(0, (cols - static_cast<int>(s.size())) / 2);
+			std::wcout << std::wstring(static_cast<size_t>(pad), L' ') << s << L"\n";
+		};
+
+		std::wcout << border << L"\n";
+		printCentered(L"Combat");
+		std::wcout << L"\n";
+
+		for (const auto& l : lines) {
+			printCentered(l);
+		}
+
+		std::wcout << L"\n";
+		printCentered(L"[Esc]  [Enter]  [Space] to continue");
+		std::wcout << border << L"\n";
+		std::wcout.flush();
+
+		for (;;) {
+			int ch = _getch();
+			if (ch == 27 || ch == 13 || ch == ' ') break;
+		}
+		while (_kbhit()) { (void)_getch(); }
+	}
+};
+
+// Levelling system: upgrade screen + per-stat cost escalation + enemy difficulty wrapper
+class Levelling {
+	int upHealth = 0;
+	int upDefense = 0;
+	int upStrength = 0;
+	int upSpeed = 0;
+
+	static void ClearKeys() {
+		while (_kbhit()) { (void)_getch(); }
+	}
+
+public:
+	Levelling() = default;
+
+	// Wrapper to centralize difficulty increase as requested.
+	template<typename TEnemy>
+	void enemyDifficultyIncrease(TEnemy& enemy) {
+		enemy.enemyDifficultyIncrease();
+	}
+
+	// Modal upgrade screen. Appears at the start of each level after gold is awarded.
+	void Open(Player& player, int& gold) {
+		bool done = false;
+		std::wstring lastMsg;
+
+		auto render = [&](int cols, int /*rows*/) {
+			auto border = std::wstring(static_cast<size_t>(cols), L'#');
+			auto printCentered = [&](const std::wstring& s) {
+				int pad = max(0, (cols - static_cast<int>(s.size())) / 2);
+				std::wcout << std::wstring(static_cast<size_t>(pad), L' ') << s << L"\n";
+			};
+
+			std::wcout << border << L"\n";
+			printCentered(L"Leveling");
+			std::wcout << L"\n";
+
+			// Current gold
+			printCentered(L"Gold: " + std::to_wstring(gold));
+			std::wcout << L"\n";
+
+			// Current stats
+			printCentered(L"Current Stats:");
+			printCentered(L"- Current Health: " + std::to_wstring(player.getCurrentHealth()) + L"/" + std::to_wstring(player.getMaxHealth()));
+			printCentered(L"- Defense:    " + std::to_wstring(player.getDefense()));
+			printCentered(L"- Strength:   " + std::to_wstring(player.getStrength()));
+			printCentered(L"- Speed:      " + std::to_wstring(player.getSpeed()));
+			std::wcout << L"\n";
+
+			// Costs: cost = 1 + number of prior upgrades for that stat
+			int cH = 1 + upHealth;
+			int cD = 1 + upDefense;
+			int cS = 1 + upStrength;
+			int cSp = 1 + upSpeed;
+
+			printCentered(L"[1] +1 Max Health  (Cost: " + std::to_wstring(cH) + L")");
+			printCentered(L"[2] +1 Defense     (Cost: " + std::to_wstring(cD) + L")");
+			printCentered(L"[3] +1 Strength    (Cost: " + std::to_wstring(cS) + L")");
+			printCentered(L"[4] +1 Speed       (Cost: " + std::to_wstring(cSp) + L")");
+			printCentered(L"[5] Healing Potion  (Cost: 2)");
+			std::wcout << L"\n";
+
+			if (!lastMsg.empty()) {
+				printCentered(lastMsg);
+				std::wcout << L"\n";
+			}
+
+			printCentered(L"[Enter]/[Esc]/[Space] to start the next level");
+			std::wcout << border << L"\n";
+			std::wcout.flush();
+		};
+
+		while (!done) {
+			// Clear
+			system("cls");
+
+			// Console size
+			HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+			CONSOLE_SCREEN_BUFFER_INFO csbi{};
+			int cols = 80, rows = 25;
+			if (GetConsoleScreenBufferInfo(hOut, &csbi)) {
+				cols = csbi.srWindow.Right - csbi.srWindow.Left + 1;
+				rows = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+			}
+
+			render(cols, rows);
+
+			// Input
+			int ch = _getch();
+			if (ch == 27 || ch == 13 || ch == ' ') {
+				done = true;
+				break;
+			}
+
+			// Compute costs each time
+			int cH = 1 + upHealth;
+			int cD = 1 + upDefense;
+			int cS = 1 + upStrength;
+			int cSp = 1 + upSpeed;
+
+			bool purchased = false;
+			switch (ch) {
+				case '1':
+					if (gold >= cH) {
+						gold -= cH;
+						upHealth++;
+						// Increase max health and grant 1 immediate health so upgrades feel rewarding
+						player.setMaxHealth(player.getMaxHealth() + 1);
+						player.setCurrentHealth(player.getCurrentHealth() + 1);
+						lastMsg = L"Purchased +1 Max Health.";
+						purchased = true;
+					} else lastMsg = L"Not enough gold for +1 Max Health.";
+					break;
+				case '2':
+					if (gold >= cD) {
+						gold -= cD;
+						upDefense++;
+						player.setDefense(player.getDefense() + 1);
+						lastMsg = L"Purchased +1 Defense.";
+						purchased = true;
+					} else lastMsg = L"Not enough gold for +1 Defense.";
+					break;
+				case '3':
+					if (gold >= cS) {
+						gold -= cS;
+						upStrength++;
+						player.setStrength(player.getStrength() + 1);
+						lastMsg = L"Purchased +1 Strength.";
+						purchased = true;
+					} else lastMsg = L"Not enough gold for +1 Strength.";
+					break;
+				case '4':
+					if (gold >= cSp) {
+						gold -= cSp;
+						upSpeed++;
+						player.setSpeed(player.getSpeed() + 1);
+						lastMsg = L"Purchased +1 Speed.";
+						purchased = true;
+					} else lastMsg = L"Not enough gold for +1 Speed.";
+					break;
+				case '5':
+					if (player.getCurrentHealth() >= player.getMaxHealth()) {
+						lastMsg = L"Health is already full.";
+					} 
+					else if (gold >= 2) {
+						gold -= 2;
+						player.healToFull();
+						lastMsg = L"Used Healing Potion. Health fully restored.";
+						purchased = true;
+					}
+					else {
+						lastMsg = L"Not enough gold for Healing Potion.";
+					}
+				default:
+					lastMsg = L"Press [1]-[5] to buy, or [Enter]/[Esc]/[Space] to start.";
+					break;
+			}
+
+			if (purchased) {
+				// brief feedback can be provided by immediate re-render; loop continues
+			}
+			ClearKeys();
+		}
+
+		ClearKeys();
+	}
+};
+
 // NEW: Gold class to place 'G' at centers of boxes with exactly one corridor
 class Gold {
 	vector<pair<int,int>> positions;
@@ -277,92 +759,6 @@ public:
 	}
 };
 
-class Enemy {
-	int ax;
-	int ay;
-public:
-	Enemy() : ax(-1), ay(-1) {}
-
-	void reset() { ax = -1; ay = -1; }
-
-	void placeAt(int x, int y) { ax = x; ay = y; }
-
-	// Accessors
-	int x() const { return ax; }
-	int y() const { return ay; }
-	bool isPlaced() const { return ax >= 0 && ay >= 0; }
-
-	// Move one step toward target (tx,ty) on floor; optionally avoid landing on a forbidden tile (e.g., player's current).
-	void stepToward(int tx, int ty, const vector<vector<char>>& grid, int forbidX = -1, int forbidY = -1) {
-		if (!isPlaced()) return;
-		int h = static_cast<int>(grid.size());
-		int w = h ? static_cast<int>(grid[0].size()) : 0;
-		auto canMove = [&](int nx, int ny) -> bool {
-			return nx >= 0 && ny >= 0 && nx < w && ny < h && grid[ny][nx] == TILE_FLOOR;
-		};
-
-		int dx = tx - ax;
-		int dy = ty - ay;
-		int stepx = (dx == 0) ? 0 : (dx > 0 ? 1 : -1);
-		int stepy = (dy == 0) ? 0 : (dy > 0 ? 1 : -1);
-
-		auto tryMove = [&](int nx, int ny) -> bool {
-			if (!canMove(nx, ny)) return false;
-			if (forbidX >= 0 && forbidY >= 0 && nx == forbidX && ny == forbidY) return false;
-			ax = nx; ay = ny;
-			return true;
-		};
-
-		if (abs(dx) >= abs(dy)) {
-			if (stepx != 0 && tryMove(ax + stepx, ay)) return;
-			if (stepy != 0) tryMove(ax, ay + stepy);
-		} else {
-			if (stepy != 0 && tryMove(ax, ay + stepy)) return;
-			if (stepx != 0) tryMove(ax + stepx, ay);
-		}
-	}
-
-	// Place at the center of a random box that does NOT contain the player and is NOT the exit box (exit is centered).
-	void placeInRandomBoxCenter(const vector<Box>& boxes,
-	                            int playerX, int playerY,
-	                            const Exit& exitTile,
-	                            const vector<vector<char>>& grid)
-	{
-		vector<int> candidates;
-		int h = static_cast<int>(grid.size());
-		int w = h ? static_cast<int>(grid[0].size()) : 0;
-
-		for (size_t i = 0; i < boxes.size(); ++i) {
-			const Box& b = boxes[i];
-			int cx = b.x() + b.width() / 2;
-			int cy = b.y() + b.height() / 2;
-
-			// inside bounds and on a floor tile
-			if (cx < 0 || cy < 0 || cx >= w || cy >= h) continue;
-			if (grid[cy][cx] != TILE_FLOOR) continue;
-
-			// exclude any box containing the player
-			if (b.contains(playerX, playerY)) continue;
-
-			// exclude the exit box (exit is always placed at a box center)
-			if (exitTile.isAt(cx, cy)) continue;
-
-			candidates.push_back(static_cast<int>(i));
-		}
-
-		if (!candidates.empty()) {
-			int idx = candidates[rand() % candidates.size()];
-			const Box& b = boxes[static_cast<size_t>(idx)];
-			ax = b.x() + b.width() / 2;
-			ay = b.y() + b.height() / 2;
-		} else {
-			reset();
-		}
-	}
-
-	bool isAt(int x, int y) const { return x == ax && y == ay; }
-};
-
 class Game {
 	bool gameOver;
 	int width;
@@ -392,6 +788,10 @@ class Game {
 	// Leveling
 	int level;
 	int gold;
+
+	Player player; //player stats
+	Enemy enemy; //enemy stats (baseline scaled across levels)
+	Levelling levelling; // NEW: levelling system
 
 	static const int MAX_WIDTH = 110;
 	static const int MAX_HEIGHT = 25;
@@ -458,12 +858,14 @@ public:
 	}
 
 	void revealCurrentSection() {
-		if (playerX < 0 || playerX >= width || playerY < 0 || playerY >= height) return;
-		int boxIndex = boxIndexForInterior(playerX, playerY);
+		int px = player.getX();
+		int py = player.getY();
+		if (px < 0 || px >= width || py < 0 || py >= height) return;
+		int boxIndex = boxIndexForInterior(px, py);
 		if (boxIndex >= 0) {
 			revealBox(boxes[static_cast<size_t>(boxIndex)]);
-		} else if (grid[playerY][playerX] == TILE_FLOOR) {
-			revealCorridorTile(playerX, playerY);
+		} else if (grid[py][px] == TILE_FLOOR) {
+			revealCorridorTile(px, py);
 		}
 	}
 
@@ -1140,24 +1542,26 @@ public:
 
 		// Place player in a random box center
 		int starterBox = rand() % static_cast<int>(boxes.size());
-		playerX = boxes[starterBox].x() + boxes[starterBox].width() / 2;
-		playerY = boxes[starterBox].y() + boxes[starterBox].height() / 2;
+		int px = boxes[starterBox].x() + boxes[starterBox].width() / 2;
+		int py = boxes[starterBox].y() + boxes[starterBox].height() / 2;
+		player.setPosition(px, py);
 
-		if (!isPassableCorridor(playerX, playerY)) {
+		if (!isPassableCorridor(player.getX(), player.getY())) {
 			bool foundOpening = false;
 			for (int dy = 0; dy < boxes[starterBox].height() && !foundOpening; dy++) {
 				for (int dx = 0; dx < boxes[starterBox].width() && !foundOpening; dx++) {
 					int tx = boxes[starterBox].x() + dx;
 					int ty = boxes[starterBox].y() + dy;
 					if (tx >= 0 && tx < width && ty >= 0 && ty < height && isPassableCorridor(tx, ty)) {
-						playerX = tx; playerY = ty; foundOpening = true;
+						player.setPosition(tx, ty);
+						foundOpening = true;
 					}
 				}
 			}
 			if (!foundOpening) {
 				for (int yy = 0; yy < height && !foundOpening; yy++)
 					for (int xx = 0; xx < width && !foundOpening; xx++)
-						if (isPassableCorridor(xx, yy)) { playerX = xx; playerY = yy; foundOpening = true; }
+						if (isPassableCorridor(xx, yy)) { player.setPosition(xx, yy); foundOpening = true; }
 			}
 		}
 
@@ -1175,9 +1579,9 @@ public:
 		}
 
 		// Place 'G' in centers of boxes with exactly one corridor (dead-ends), avoiding player and exit tiles
-		goldItems.placeForDeadEnds(boxes, grid, exitTile, playerX, playerY);
+		goldItems.placeForDeadEnds(boxes, grid, exitTile, player.getX(), player.getY());
 
-		// NEW: Spawn an enemy in every box that doesn't contain Gold, Player, or Exit
+		// NEW: Spawn an enemy in every box that does NOT contain Gold, Player, or Exit
 		enemies.clear();
 		for (const auto& b : boxes) {
 			int cx = b.x() + b.width() / 2;
@@ -1188,11 +1592,18 @@ public:
 			if (grid[cy][cx] != TILE_FLOOR) continue;
 
 			// exclude player's box center position, exit, and gold
-			if (b.contains(playerX, playerY) && (playerX == cx && playerY == cy)) continue;
+			if (b.contains(player.getX(), player.getY()) && (player.getX() == cx && player.getY() == cy)) continue;
 			if (exitTile.isAt(cx, cy)) continue;
 			if (goldItems.isAt(cx, cy)) continue;
 
 			Enemy e;
+			// Apply baseline scaled stats so difficulty increases across levels
+			e.setMaxHealth(enemy.getMaxHealth());
+			e.healToFull();
+			e.setDefense(enemy.getDefense());
+			e.setStrength(enemy.getStrength());
+			e.setSpeed(enemy.getSpeed());
+
 			e.placeAt(cx, cy);
 			enemies.push_back(e);
 		}
@@ -1201,9 +1612,23 @@ public:
 		revealCurrentSection();
 	}
 
+	// Remove any enemy at x,y. Returns how many were removed.
+	int removeEnemiesAt(int x, int y) {
+		size_t before = enemies.size();
+		enemies.erase(
+			remove_if(enemies.begin(), enemies.end(),
+				[&](const Enemy& e) { return e.isAt(x, y); }),
+			enemies.end());
+		return static_cast<int>(before - enemies.size());
+	}
+
 	// Helper: any enemy at x,y
 	bool anyEnemyAt(int x, int y) const {
-		for (const auto& e : enemies) if (e.isAt(x, y)) return true;
+		for (const auto& e : enemies) {
+			if (e.isAt(x, y)) {
+				return true;
+				}
+		}
 		return false;
 	}
 
@@ -1211,14 +1636,15 @@ public:
 		system("cls");
 
 		// HUD
-		string hudLeft = "Level " + to_string(level);
+		string hudLeft = "Level: " + to_string(level);
+		string hudMiddle = "Health: " + to_string(player.getCurrentHealth()) + "/" + to_string(player.getMaxHealth());
 		string hudRight = "Gold: " + to_string(gold);
 		int total = width + 2;
-		int spaces = total - static_cast<int>(hudLeft.size()) - static_cast<int>(hudRight.size());
-		if (spaces < 1) {
-			spaces = 1;
+		int spaces = total - static_cast<int>(hudLeft.size()) - static_cast<int>(hudRight.size()) - static_cast<int>(hudMiddle.size());
+		if (spaces < 2) {
+			spaces = 2;
 		}
-		cout << hudLeft << string(spaces, ' ') << hudRight << endl;
+		cout << hudLeft << string((spaces / 2), ' ') << hudMiddle << string((spaces / 2), ' ') << hudRight << endl;
 
 		// Top border
 		for(int i=0;i<width+2; i++)
@@ -1230,7 +1656,7 @@ public:
 				if (j == 0)
 					cout << "#"; // Left border
 
-				if (i == playerY && j == playerX) {
+				if (i == player.getY() && j == player.getX()) {
 					cout << "O"; // Player position
 				}
 				else if (!revealedAreas[i][j]) {
@@ -1294,40 +1720,44 @@ public:
 
 	void nextLevel() {
 		// Increase level and gold and grow the map size up to the configured maximums.
-		gold++;
+		gold++; // reward for reaching exit (gain gold first)
 		level++;
 		width  = min(MAX_WIDTH,  width  + 5);
 		height = min(MAX_HEIGHT, height + 1);
 		boxNumber = min(MAX_BOXES, boxNumber + 1);
 
-		Setup();
+		// Centralize difficulty scaling and levelling UI here
+		levelling.enemyDifficultyIncrease(enemy); // scale future enemies
+		levelling.Open(player, gold);             // allow spending gold to upgrade player
+
+		Setup(); // build the next level with upgraded player and scaled enemies
 	}
 
 	void Logic() {
-		int prevX = playerX;
-		int prevY = playerY;
+		int prevX = player.getX();
+		int prevY = player.getY();
 
-		int targetX = playerX;
-		int targetY = playerY;
+		int targetX = prevX;
+		int targetY = prevY;
 
-		int newX = playerX;
-		int newY = playerY;
+		int newX = prevX;
+		int newY = prevY;
 
 		switch (dir) {
 			case LEFT:
-				newX = playerX - 1;
+				newX = prevX - 1;
 				targetX = newX - 1;
 				break;
 			case RIGHT:
-				newX = playerX + 1;
+				newX = prevX + 1;
 				targetX = newX + 1;
 				break;
 			case UP:
-				newY = playerY - 1;
+				newY = prevY - 1;
 				targetY = newY - 1;
 				break;
 			case DOWN:
-				newY = playerY + 1;
+				newY = prevY + 1;
 				targetY = newY + 1;
 				break;
 			default:
@@ -1335,23 +1765,48 @@ public:
 		}
 
 		if (isPassableCorridor(newX, newY)) {
-			playerX = newX;
-			playerY = newY;
+			player.setX(newX);
+			player.setY(newY);
 		}
 
-		if (playerX != prevX || playerY != prevY) {
+		if (player.getX() != prevX || player.getY() != prevY) {
 			revealCurrentSection();
 		}
 
-		// If player moved and is in the same box as an enemy, move that enemy one step toward the player's previous position,
-		// but never onto the player's current tile.
-		bool playerMoved = (playerX != prevX) || (playerY != prevY);
+		// If player moved and is in the same box as an enemy, check contact and move enemies
+		bool playerMoved = (player.getX() != prevX) || (player.getY() != prevY);
+
+		// Trigger combat when moving onto an enemy
+		if (playerMoved && anyEnemyAt(player.getX(), player.getY())) {
+			// Find the concrete enemy on this tile
+			int idx = -1;
+			for (size_t i = 0; i < enemies.size(); ++i) {
+				if (enemies[i].isAt(player.getX(), player.getY())) { idx = static_cast<int>(i); break; }
+			}
+
+			if (idx >= 0) {
+				Combat combat;
+				combat.OpenBattle(player, enemies[static_cast<size_t>(idx)]);
+
+				// Remove the enemy only if defeated
+				if (enemies[static_cast<size_t>(idx)].isDead()) {
+					removeEnemiesAt(player.getX(), player.getY());
+				}
+
+				// If player died, end the game immediately
+				if (player.isDead()) {
+					gameOver = true;
+					return;
+				}
+			}
+		}
+
 		if (playerMoved) {
 			for (auto& e : enemies) {
 				if (!e.isPlaced()) continue;
 				for (const auto& b : boxes) {
-					if (b.contains(playerX, playerY) && b.contains(e.x(), e.y())) {
-						e.stepToward(targetX, targetY, grid, playerX, playerY);
+					if (b.contains(player.getX(), player.getY()) && b.contains(e.x(), e.y())) {
+						e.stepToward(targetX, targetY, grid, player.getX(), player.getY());
 						break;
 					}
 				}
@@ -1359,12 +1814,12 @@ public:
 		}
 
 		// Pick up gold if standing on it
-		if (goldItems.tryPickup(playerX, playerY)) {
+		if (goldItems.tryPickup(player.getX(), player.getY())) {
 			gold += 2;
 		}
 
 		// Level up on exit
-		if (exitTile.isAt(playerX, playerY)) {
+		if (exitTile.isAt(player.getX(), player.getY())) {
 			nextLevel();
 			Draw();
 			dir = STOP;
