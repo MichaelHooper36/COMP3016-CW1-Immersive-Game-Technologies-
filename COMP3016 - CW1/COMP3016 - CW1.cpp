@@ -213,8 +213,8 @@ class Enemy {
 	int lastUpStrength;
 
 public:
-	// Default all stats to 5; health starts full
-	Enemy(int h = 5, int d = 5, int s = 5)
+	// Default health to 10 an other stats to 5; health starts full
+	Enemy(int h = 10, int d = 5, int s = 5)
 		: ax(-1), ay(-1),
 		  maxHealth(h), currentHealth(h), defense(d), strength(s),
 		  lastUpHealth(0), lastUpDefense(0), lastUpStrength(0) {
@@ -337,7 +337,7 @@ public:
 		// reset last-deltas
 		lastUpHealth = lastUpDefense = lastUpStrength = 0;
 
-		int points = 3;
+		int points = 5;
 		while (points-- > 0) {
 			switch (rand() % 3) {
 				case 0: lastUpHealth++;   break;
@@ -367,34 +367,63 @@ class Player {
 	int potions; // healing potion inventory
 
 public:
-	Player(int h = 5, int d = 3, int s = 6)
+	Player(int h = 20, int d = 2, int s = 6)
 		: x(0), y(0), maxHealth(h), currentHealth(h), defense(d), strength(s), potions(0) {
 	}
 
 	// Position
-	int getX() const { return x; }
-	int getY() const { return y; }
-	void setX(int nx) { x = nx; }
-	void setY(int ny) { y = ny; }
-	void setPosition(int nx, int ny) { x = nx; y = ny; }
+	int getX() const { 
+		return x; 
+	}
+	int getY() const { 
+		return y; 
+	}
+	void setX(int nx) { 
+		x = nx; 
+	}
+	void setY(int ny) {
+		y = ny; 
+	}
+	void setPosition(int nx, int ny) {
+		x = nx; 
+		y = ny; 
+	}
 
 	// Stats
-	int getMaxHealth() const { return maxHealth; }
-	int getCurrentHealth() const { return currentHealth; }
-	int getDefense() const { return defense; }
-	int getStrength() const { return strength; }
+	int getMaxHealth() const {
+		return maxHealth; 
+	}
+	int getCurrentHealth() const { 
+		return currentHealth; 
+	}
+	int getDefense() const { 
+		return defense; 
+	}
+	int getStrength() const { 
+		return strength; 
+	}
 
 	void setMaxHealth(int mh) {
 		maxHealth = max(0, mh);
 		currentHealth = min(currentHealth, maxHealth);
 	}
-	void setCurrentHealth(int ch) { currentHealth = max(0, min(ch, maxHealth)); }
-	void setDefense(int d) { defense = d; }
-	void setStrength(int s) { strength = s; }
+	void setCurrentHealth(int ch) { 
+		currentHealth = max(0, min(ch, maxHealth)); 
+	}
+	void setDefense(int d) { 
+		defense = d; 
+	}
+	void setStrength(int s) { 
+		strength = s; 
+	}
 
 	// Healing helpers
-	void heal(int amount) { setCurrentHealth(currentHealth + max(0, amount)); }
-	void healToFull() { currentHealth = maxHealth; }
+	void heal(int amount) { 
+		setCurrentHealth(currentHealth + max(0, amount)); 
+	}
+	void healToFull() { 
+		currentHealth = maxHealth; 
+	}
 
 	// Damage helper
 	int applyDamage(int rawDamage) {
@@ -403,16 +432,25 @@ public:
 		return dmg;
 	}
 
-	bool isDead() const { return currentHealth <= 0; }
+	bool isDead() const { 
+		return currentHealth <= 0; 
+	}
 
 	// Potions inventory
-	int getPotions() const { return potions; }
-	void addPotions(int n) { potions = max(0, potions + n); }
-	bool canUsePotion() const { return potions > 0 && currentHealth < maxHealth; }
+	int getPotions() const { 
+		return potions; 
+	}
+	void addPotions(int n) { 
+		potions = max(0, potions + n); 
+	}
+	bool canUsePotion() const { 
+		return potions > 0 && currentHealth < maxHealth; 
+	}
 	bool usePotion() {
-		if (!canUsePotion()) return false;
+		if (!canUsePotion()) 
+			return false;
 		potions--;
-		healToFull();
+		heal(maxHealth / 2);
 		return true;
 	}
 };
@@ -474,8 +512,10 @@ public:
 	}
 
 	// Interactive battle with explicit starter: playerStarts = true if player walked into the enemy.
-	// New: Defend action. If a character defends, the next damage they take is reduced by their Defense.
-	void OpenBattle(Player& player, Enemy& enemy, bool playerStarts) {
+	// Defend action expires at the start of the defender's next turn if unused.
+	// Parry: If a defending character is dealt damage, they counter for scaled true damage.
+	// Returns true if the player successfully ran away (escaped).
+	bool OpenBattle(Player& player, Enemy& enemy, bool playerStarts, int prevPlayerX, int prevPlayerY) {
 		auto getConsoleSize = []() {
 			HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
 			CONSOLE_SCREEN_BUFFER_INFO csbi{};
@@ -516,7 +556,7 @@ public:
 			std::wcout << L"\n";
 			if (showMenu) {
 				std::wstring defendStatus = playerDefendReady ? L" (Defend active)" : L"";
-				printCentered(L"Your turn: [1] Attack   [2] Defend   [3] Item (Potions: " +
+				printCentered(L"Your turn: [1] Attack   [2] Defend   [3] Item   [4] Run (40%) (Potions: " +
 				              std::to_wstring(p.getPotions()) + L")" + defendStatus);
 			} else {
 				printCentered(L"[Esc]/[Enter]/[Space] to continue");
@@ -529,6 +569,19 @@ public:
 		bool playerTurn = playerStarts;
 
 		while (!player.isDead() && !enemy.isDead()) {
+			// Expire defend at the start of the defender's own turn if it wasn't used.
+			if (playerTurn) {
+				// Player's turn begins: player's previous defend (if unused) wears off now.
+				if (playerDefendReady) {
+					playerDefendReady = false;
+				}
+			} else {
+				// Enemy's turn begins: enemy's previous defend (if unused) wears off now.
+				if (enemyDefendReady) {
+					enemyDefendReady = false;
+				}
+			}
+
 			// Enemy turn
 			if (!playerTurn) {
 				// 20% chance to defend instead of attacking
@@ -536,6 +589,7 @@ public:
 					enemyDefendReady = true;
 					log.push_back(L"Enemy braces to defend. Next damage taken reduced by " +
 					              std::to_wstring(enemy.getDefense()) + L".");
+					log.push_back(L" ");
 					playerTurn = true;
 					continue;
 				}
@@ -543,11 +597,13 @@ public:
 				// Enemy attacks
 				int raw = max(0, enemy.getStrength());
 				int reducedBy = 0;
+				bool playerConsumedDefend = false;
 				if (playerDefendReady) {
-					reducedBy = min(raw, player.getDefense());
+					reducedBy = player.getDefense();
 					playerDefendReady = false; // consume the defend
+					playerConsumedDefend = true;
 				}
-				int dmg = max(0, raw - reducedBy);
+				int dmg = max(1, raw - reducedBy);
 				int newHP = max(0, player.getCurrentHealth() - dmg);
 				player.setCurrentHealth(newHP);
 
@@ -557,6 +613,17 @@ public:
 				        L"/" + std::to_wstring(player.getMaxHealth());
 				log.push_back(line);
 
+				// Parry: if defending and actually took damage, deal true damage back
+				if (playerConsumedDefend && dmg > 0) {
+					int parry = (dmg * (player.getStrength() / 4));
+					parry = max(1, parry); // ensure parry has effect
+					int eHP = max(0, enemy.getCurrentHealth() - parry);
+					enemy.setCurrentHealth(eHP);
+					log.push_back(L"Player parries and deals " + std::to_wstring(parry) + L" damage back. Enemy health: " +
+					              std::to_wstring(eHP) + L"/" + std::to_wstring(enemy.getMaxHealth()));
+				}
+
+				log.push_back(L" ");
 				playerTurn = true;
 				continue;
 			}
@@ -569,11 +636,13 @@ public:
 					// Attack
 					int raw = max(0, player.getStrength());
 					int reducedBy = 0;
+					bool enemyConsumedDefend = false;
 					if (enemyDefendReady) {
-						reducedBy = min(raw, enemy.getDefense());
+						reducedBy = enemy.getDefense();
 						enemyDefendReady = false; // consume the defend
+						enemyConsumedDefend = true;
 					}
-					int dmg = max(0, raw - reducedBy);
+					int dmg = max(1, raw - reducedBy);
 					int newHP = max(0, enemy.getCurrentHealth() - dmg);
 					enemy.setCurrentHealth(newHP);
 
@@ -582,10 +651,22 @@ public:
 					line += L". Enemy health: " + std::to_wstring(newHP) +
 					        L"/" + std::to_wstring(enemy.getMaxHealth());
 					log.push_back(line);
+
+					// Parry: if defending and actually took damage, deal true damage back
+					if (enemyConsumedDefend && dmg > 0) {
+						int parry = (dmg * (enemy.getStrength() / 4));
+						parry = max(1, parry);
+						int pHP = max(0, player.getCurrentHealth() - parry);
+						player.setCurrentHealth(pHP);
+						log.push_back(L"Enemy parries and deals " + std::to_wstring(parry) + L" damage back. Player health: " +
+						              std::to_wstring(pHP) + L"/" + std::to_wstring(player.getMaxHealth()));
+						enemyConsumedDefend = false;
+					}
+
 					break; // end player's turn
 				}
 				if (ch == '2') {
-					// Defend: buffer next incoming damage with player's Defense
+					// Defend
 					playerDefendReady = true;
 					log.push_back(L"Player defends. Next damage taken reduced by " +
 					              std::to_wstring(player.getDefense()) + L".");
@@ -604,6 +685,29 @@ public:
 						// keep waiting on the same turn for a valid action
 					}
 				}
+				if (ch == '4') {
+					// Run: 40% chance to escape; on success, move back to previous position
+					log.push_back(L"You try to run...");
+					if ((rand() % 100) < 40) {
+						log.push_back(L"You successfully ran away!");
+						// Render outcome and wait for dismiss before leaving combat
+						render(log, false, player);
+						for (;;) {
+							int k = _getch();
+							if (k == 27 || k == 13 || k == ' ') break;
+						}
+						while (_kbhit()) { (void)_getch(); }
+						system("cls");
+
+						// Move player back to previous position
+						player.setPosition(prevPlayerX, prevPlayerY);
+						return true; // escaped
+					} else {
+						log.push_back(L"Failed to run!");
+						// Running attempt consumes the turn; enemy acts next
+						break;
+					}
+				}
 				// ignore other keys
 			}
 			playerTurn = false;
@@ -614,7 +718,7 @@ public:
 			log.push_back(L"Enemy defeated!");
 			log.push_back(L"You gained some gold!");
 		} 
-		else if (player.isDead()) {
+		if (player.isDead()) {
 			log.push_back(L"You were defeated!");
 		}
 
@@ -624,8 +728,13 @@ public:
 			if (ch == 27 || ch == 13 || ch == ' ') break;
 		}
 		while (_kbhit()) { (void)_getch(); }
+
+		// Clear the combat UI so the game frame doesn't overlap with leftover lines
+		system("cls");
+		return false; // did not escape
 	}
 };
+
 
 // Levelling system: upgrade screen + per-stat cost escalation + enemy difficulty wrapper
 class Levelling {
@@ -692,7 +801,7 @@ public:
 			int cD = 1 + upDefense;
 			int cS = 1 + upStrength;
 
-			printCentered(L"[1] +1 Max Health  (Cost: " + std::to_wstring(cH) + L")");
+			printCentered(L"[1] +2 Max Health  (Cost: " + std::to_wstring(cH) + L")");
 			printCentered(L"[2] +1 Defense     (Cost: " + std::to_wstring(cD) + L")");
 			printCentered(L"[3] +1 Strength    (Cost: " + std::to_wstring(cS) + L")");
 			printCentered(L"[4] Healing Potion (Cost: 2)");
@@ -731,61 +840,61 @@ public:
 			}
 
 			// Compute costs each time
-			int cH = 1 + upHealth;
-			int cD = 1 + upDefense;
-			int cS = 1 + upStrength;
+		 int cH = 1 + upHealth;
+		 int cD = 1 + upDefense;
+		 int cS = 1 + upStrength;
 
-			bool purchased = false;
-			switch (ch) {
-				case '1':
-					if (gold >= cH) {
-						gold -= cH;
-						upHealth++;
-						// Increase max health and grant 1 immediate health so upgrades feel rewarding
-						player.setMaxHealth(player.getMaxHealth() + 1);
-						player.setCurrentHealth(player.getCurrentHealth() + 1);
-						lastMsg = L"Purchased +1 Max Health.";
-						purchased = true;
-					} else lastMsg = L"Not enough gold for +1 Max Health.";
-					break;
-				case '2':
-					if (gold >= cD) {
-						gold -= cD;
-						upDefense++;
-						player.setDefense(player.getDefense() + 1);
-						lastMsg = L"Purchased +1 Defense.";
-						purchased = true;
-					} else lastMsg = L"Not enough gold for +1 Defense.";
-					break;
-				case '3':
-					if (gold >= cS) {
-						gold -= cS;
-						upStrength++;
-						player.setStrength(player.getStrength() + 1);
-						lastMsg = L"Purchased +1 Strength.";
-						purchased = true;
-					} else lastMsg = L"Not enough gold for +1 Strength.";
-					break;
-				case '4':
-					if (gold >= 2) {
-						gold -= 2;
-						player.addPotions(1);
-						lastMsg = L"You gained a health potion!";
-						purchased = true;
-					}
-					else {
-						lastMsg = L"Not enough gold for Healing Potion.";
-					}
-					break;
-				default:
-					lastMsg = L"Press [1]-[4] to buy, or [Enter]/[Esc]/[Space] to start.";
-					break;
-			}
+		 bool purchased = false;
+		 switch (ch) {
+			 case '1':
+				 if (gold >= cH) {
+					 gold -= cH;
+					 upHealth += 1;
+					 // Increase max health and grant 1 immediate health so upgrades feel rewarding
+					 player.setMaxHealth(player.getMaxHealth() + 2);
+					 player.setCurrentHealth(player.getCurrentHealth() + 2);
+					 lastMsg = L"Purchased +2 Max Health.";
+					 purchased = true;
+				 } else lastMsg = L"Not enough gold for +2 Max Health.";
+				 break;
+			 case '2':
+				 if (gold >= cD) {
+					 gold -= cD;
+					 upDefense++;
+					 player.setDefense(player.getDefense() + 1);
+					 lastMsg = L"Purchased +1 Defense.";
+					 purchased = true;
+				 } else lastMsg = L"Not enough gold for +1 Defense.";
+				 break;
+			 case '3':
+				 if (gold >= cS) {
+					 gold -= cS;
+					 upStrength++;
+					 player.setStrength(player.getStrength() + 1);
+					 lastMsg = L"Purchased +1 Strength.";
+					 purchased = true;
+				 } else lastMsg = L"Not enough gold for +1 Strength.";
+				 break;
+			 case '4':
+				 if (gold >= 2) {
+					 gold -= 2;
+					 player.addPotions(1);
+					 lastMsg = L"You gained a health potion!";
+					 purchased = true;
+				 }
+				 else {
+					 lastMsg = L"Not enough gold for Healing Potion.";
+				 }
+				 break;
+			 default:
+				 lastMsg = L"Press [1]-[4] to buy, or [Enter]/[Esc]/[Space] to start.";
+				 break;
+		 }
 
-			if (purchased) {
-				// brief feedback can be provided by immediate re-render; loop continues
-			}
-			ClearKeys();
+		 if (purchased) {
+			 // brief feedback can be provided by immediate re-render; loop continues
+		 }
+		 ClearKeys();
 		}
 
 		ClearKeys();
@@ -1510,7 +1619,7 @@ public:
 				sort(cand.begin(), cand.end());
 				for (auto &p : cand) {
 					size_t a = p.second.first;
-					size_t b = p.second.second;
+				 size_t b = p.second.second;
 					if (degree[a] >= 2 || degree[b] >= 2) continue;
 					uint64_t key = pairKey(a,b);
 					if (connections.find(key) != connections.end()) continue;
@@ -1644,7 +1753,7 @@ public:
 			// we mark as failure so the generator retries with a new layout.
 			if (success) {
 				auto compsFinal = computeComponents();
-				if (compsFinal.size() != 1) success = false;
+			 if (compsFinal.size() != 1) success = false;
 			}
 
 			// If failed this generation attempt, clear corridors and try again (next genAttempt).
@@ -1804,9 +1913,11 @@ public:
 		frame.append(width + 2, '#');
 		frame += '\n';
 
-		frame += "Controls: W/A/S/D to move, X to exit\n";
-		frame += "Reach the exit (X) to advance levels and earn more gold!\n";
-		frame += "Be on the lookout for adversaries (A) in your way and don't forget to pick up any gold (G) you find!\n";
+		if (level == 1) {
+			frame += "Controls: W/A/S/D to move, P to use a potion and Esc to exit\n";
+			frame += "Reach the exit (X) to advance levels and earn more gold!\n";
+			frame += "Be on the lookout for adversaries (A) in your way and don't forget to pick up any gold (G) you find!\n";
+		}
 
 		// Write to console at the top-left without clearing the screen (avoids slow system(\"cls\"))
 		HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -1832,7 +1943,10 @@ public:
 				case 's':
 					dir = DOWN;
 					break;
-				case 'x':
+				case 'p':
+					(void)player.usePotion();
+					break;
+				case 27:
 					gameOver = true;
 					break;
 			}
@@ -1851,6 +1965,9 @@ public:
 		// Centralize difficulty scaling and levelling UI here
 		levelling.enemyDifficultyIncrease(enemy); // scale future enemies
 		levelling.Open(player, gold);             // allow spending gold to upgrade player
+
+		// Ensure the leveling screen is cleared before rendering the next level frame
+		system("cls");
 
 		Setup(); // build the next level with upgraded player and scaled enemies
 	}
@@ -1899,7 +2016,14 @@ public:
 
 			if (idx >= 0) {
 				Combat combat;
-				combat.OpenBattle(player, enemies[static_cast<size_t>(idx)], /*playerStarts=*/true);
+				const bool escaped = combat.OpenBattle(player, enemies[static_cast<size_t>(idx)], /*playerStarts=*/true, prevX, prevY);
+
+				if (escaped) {
+					// Stop processing this tick after escape (avoid immediate re-trigger)
+					dir = STOP;
+					Draw();
+					return;
+				}
 
 				if (enemies[static_cast<size_t>(idx)].isDead()) {
 					removeEnemiesAt(player.getX(), player.getY());
@@ -1916,14 +2040,31 @@ public:
 
 		// Enemy movement
 		if (playerMoved) {
+			// Determine the player's current box, if any
+			int playerBoxIdx = -1;
+			for (size_t i = 0; i < boxes.size(); ++i) {
+				if (boxes[i].contains(player.getX(), player.getY())) { playerBoxIdx = static_cast<int>(i); break; }
+			}
+
 			for (auto& e : enemies) {
 				if (!e.isPlaced()) continue;
-				for (const auto& b : boxes) {
-					if (b.contains(player.getX(), player.getY()) && b.contains(e.x(), e.y())) {
-						// Allow stepping onto the player's tile (no forbidX/forbidY)
-						e.stepToward(player.getX(), player.getY(), grid);
-						break;
-					}
+
+				// Determine the enemy's box
+				int enemyBoxIdx = -1;
+				for (size_t i = 0; i < boxes.size(); ++i) {
+					if (boxes[i].contains(e.x(), e.y())) { enemyBoxIdx = static_cast<int>(i); break; }
+				}
+
+				// If in the same box as the player, chase the player
+				if (enemyBoxIdx >= 0 && enemyBoxIdx == playerBoxIdx) {
+					e.stepToward(player.getX(), player.getY(), grid);
+				}
+				// Otherwise, if the enemy's box is discovered, drift toward its center
+				else if (enemyBoxIdx >= 0 && isBoxDiscovered(boxes[static_cast<size_t>(enemyBoxIdx)])) {
+					const Box& b = boxes[static_cast<size_t>(enemyBoxIdx)];
+					int cx = b.x() + b.width() / 2;
+					int cy = b.y() + b.height() / 2;
+					e.stepToward(cx, cy, grid);
 				}
 			}
 		}
@@ -1937,7 +2078,13 @@ public:
 
 			if (idx >= 0) {
 				Combat combat;
-				combat.OpenBattle(player, enemies[static_cast<size_t>(idx)], /*playerStarts=*/false);
+				const bool escaped = combat.OpenBattle(player, enemies[static_cast<size_t>(idx)], /*playerStarts=*/false, prevX, prevY);
+
+				if (escaped) {
+					dir = STOP;
+					Draw();
+					return;
+				}
 
 				if (enemies[static_cast<size_t>(idx)].isDead()) {
 					removeEnemiesAt(player.getX(), player.getY());
@@ -1968,6 +2115,20 @@ public:
 		Draw();
 	}
 
+	bool isBoxDiscovered(const Box& b) const {
+		int x0 = b.x();
+		int y0 = b.y();
+		int x1 = x0 + b.width() - 1;
+		int y1 = y0 + b.height() - 1;
+		for (int y = max(0, y0); y <= min(height - 1, y1); ++y) {
+			for (int x = max(0, x0); x <= min(width - 1, x1); ++x) {
+				if (revealedAreas[y][x]) return true;
+			}
+		}
+		return false;
+	}
+
+	// Run the main game loop
 	void Run() {
 		Setup();
 		Draw();
