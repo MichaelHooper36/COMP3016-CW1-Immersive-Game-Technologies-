@@ -9,6 +9,7 @@
 #include <unordered_set>
 #include <cmath>
 #include <string>
+#include <queue>
 
 using namespace std;
 
@@ -181,10 +182,10 @@ public:
 			for (int determiner = -1; determiner <= 1; ++determiner) {
 				int edgeX = midX + determiner;
 				if (edgeX < minX) {
-					edgeX = minX;
+				edgeX = minX;
 				}
 				if (edgeX > maxX) {
-					edgeX = maxX;
+				edgeX = maxX;
 				}
 				edges.emplace_back(edgeX, edgeY);
 			}
@@ -205,12 +206,18 @@ class Enemy {
 	int currentHealth;
 	int defense;
 	int strength;
-	int speed; // NEW: movement speed
+
+	// Track last upgrade deltas to display messages after scaling
+	int lastUpHealth;
+	int lastUpDefense;
+	int lastUpStrength;
 
 public:
-	// Default all stats to 5; health starts full; speed defaults to 5
-	Enemy(int h = 5, int d = 5, int s = 5, int sp = 5)
-		: ax(-1), ay(-1), maxHealth(h), currentHealth(h), defense(d), strength(s), speed(sp) {
+	// Default all stats to 5; health starts full
+	Enemy(int h = 5, int d = 5, int s = 5)
+		: ax(-1), ay(-1),
+		  maxHealth(h), currentHealth(h), defense(d), strength(s),
+		  lastUpHealth(0), lastUpDefense(0), lastUpStrength(0) {
 	}
 
 	void reset() { ax = -1; ay = -1; }
@@ -227,7 +234,6 @@ public:
 	int getCurrentHealth() const { return currentHealth; }
 	int getDefense() const { return defense; }
 	int getStrength() const { return strength; }
-	int getSpeed() const { return speed; } // NEW
 
 	// Optional setters
 	void setMaxHealth(int mh) {
@@ -237,7 +243,6 @@ public:
 	void setCurrentHealth(int ch) { currentHealth = max(0, min(ch, maxHealth)); }
 	void setDefense(int d) { defense = d; }
 	void setStrength(int s) { strength = s; }
-	void setSpeed(int sp) { speed = sp; } // NEW
 
 	// Healing helpers
 	void heal(int amount) { setCurrentHealth(currentHealth + max(0, amount)); }
@@ -320,12 +325,34 @@ public:
 
 	bool isAt(int x, int y) const { return x == ax && y == ay; }
 
+	// Expose last per-stat deltas applied during the most recent difficulty increase
+	void getLastUpgradeDelta(int& h, int& d, int& s) const {
+		h = lastUpHealth;
+		d = lastUpDefense;
+		s = lastUpStrength;
+	}
+
+	// New behavior: spend 3 upgrade points across MaxHealth/Defense/Strength in any combination.
 	void enemyDifficultyIncrease() {
-		maxHealth++;
+		// reset last-deltas
+		lastUpHealth = lastUpDefense = lastUpStrength = 0;
+
+		int points = 3;
+		while (points-- > 0) {
+			switch (rand() % 3) {
+				case 0: lastUpHealth++;   break;
+				case 1: lastUpDefense++;  break;
+				default:lastUpStrength++; break;
+			}
+		}
+
+		// apply upgrades
+		maxHealth += lastUpHealth;
+		defense   += lastUpDefense;
+		strength  += lastUpStrength;
+
+		// keep health full after scaling
 		currentHealth = maxHealth;
-		defense++;
-		strength++;
-		speed++;
 	}
 };
 
@@ -337,12 +364,11 @@ class Player {
 	int currentHealth;
 	int defense;
 	int strength;
-	int speed; // NEW: movement speed
+	int potions; // healing potion inventory
 
 public:
-	// Speed defaults to 5
-	Player(int h = 5, int d = 3, int s = 6, int sp = 5)
-		: x(0), y(0), maxHealth(h), currentHealth(h), defense(d), strength(s), speed(sp) {
+	Player(int h = 5, int d = 3, int s = 6)
+		: x(0), y(0), maxHealth(h), currentHealth(h), defense(d), strength(s), potions(0) {
 	}
 
 	// Position
@@ -357,7 +383,6 @@ public:
 	int getCurrentHealth() const { return currentHealth; }
 	int getDefense() const { return defense; }
 	int getStrength() const { return strength; }
-	int getSpeed() const { return speed; } // NEW
 
 	void setMaxHealth(int mh) {
 		maxHealth = max(0, mh);
@@ -366,7 +391,6 @@ public:
 	void setCurrentHealth(int ch) { currentHealth = max(0, min(ch, maxHealth)); }
 	void setDefense(int d) { defense = d; }
 	void setStrength(int s) { strength = s; }
-	void setSpeed(int sp) { speed = sp; } // NEW
 
 	// Healing helpers
 	void heal(int amount) { setCurrentHealth(currentHealth + max(0, amount)); }
@@ -380,6 +404,17 @@ public:
 	}
 
 	bool isDead() const { return currentHealth <= 0; }
+
+	// Potions inventory
+	int getPotions() const { return potions; }
+	void addPotions(int n) { potions = max(0, potions + n); }
+	bool canUsePotion() const { return potions > 0 && currentHealth < maxHealth; }
+	bool usePotion() {
+		if (!canUsePotion()) return false;
+		potions--;
+		healToFull();
+		return true;
+	}
 };
 
 class Combat {
@@ -438,71 +473,152 @@ public:
 		// Let the game redraw its next frame
 	}
 
-	// NEW: Full battle that alternates attacks and updates health.
-	// Damage equals the attacker's strength (ignores defense by requirement).
-	void OpenBattle(Player& player, Enemy& enemy) {
-		// Build combat transcript
-		std::vector<std::wstring> lines;
+	// Interactive battle with explicit starter: playerStarts = true if player walked into the enemy.
+	// New: Defend action. If a character defends, the next damage they take is reduced by their Defense.
+	void OpenBattle(Player& player, Enemy& enemy, bool playerStarts) {
+		auto getConsoleSize = []() {
+			HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+			CONSOLE_SCREEN_BUFFER_INFO csbi{};
+			int cols = 80, rows = 25;
+			if (GetConsoleScreenBufferInfo(hOut, &csbi)) {
+				cols = csbi.srWindow.Right - csbi.srWindow.Left + 1;
+				rows = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+			}
+			return pair<int,int>(cols, rows);
+		};
 
-		bool playerTurn = (player.getSpeed() > enemy.getSpeed()) ? true : false; // enemy starts unless player is faster
+		// Defend buffers: when true, the next incoming damage is reduced by that defender's Defense.
+		bool playerDefendReady = false;
+		bool enemyDefendReady  = false;
+
+		auto render = [&](const vector<wstring>& lines, bool showMenu, const Player& p) {
+			auto cols = getConsoleSize().first, rows = getConsoleSize().second;
+			system("cls");
+
+			auto border = std::wstring(static_cast<size_t>(cols), L'#');
+			auto printCentered = [&](const std::wstring& s) {
+				int pad = max(0, (cols - static_cast<int>(s.size())) / 2);
+				std::wcout << std::wstring(static_cast<size_t>(pad), L' ') << s << L"\n";
+			};
+
+			std::wcout << border << L"\n";
+			printCentered(L"Combat");
+			std::wcout << L"\n";
+
+			// Keep within the console height: leave 4 lines for title/menu/borders
+			int maxLines = max(0, rows - 4);
+			int start = 0;
+			if ((int)lines.size() > maxLines) start = (int)lines.size() - maxLines;
+			for (size_t i = static_cast<size_t>(start); i < lines.size(); ++i) {
+				printCentered(lines[i]);
+			}
+
+			std::wcout << L"\n";
+			if (showMenu) {
+				std::wstring defendStatus = playerDefendReady ? L" (Defend active)" : L"";
+				printCentered(L"Your turn: [1] Attack   [2] Defend   [3] Item (Potions: " +
+				              std::to_wstring(p.getPotions()) + L")" + defendStatus);
+			} else {
+				printCentered(L"[Esc]/[Enter]/[Space] to continue");
+			}
+			std::wcout << border << L"\n";
+			std::wcout.flush();
+		};
+
+		vector<wstring> log;
+		bool playerTurn = playerStarts;
 
 		while (!player.isDead() && !enemy.isDead()) {
-			if (playerTurn) {
-				int dmg = max(0, player.getStrength());
-				int newHP = max(0, enemy.getCurrentHealth() - dmg);
-				enemy.setCurrentHealth(newHP);
+			// Enemy turn
+			if (!playerTurn) {
+				// 20% chance to defend instead of attacking
+				if ((rand() % 100) < 20) {
+					enemyDefendReady = true;
+					log.push_back(L"Enemy braces to defend. Next damage taken reduced by " +
+					              std::to_wstring(enemy.getDefense()) + L".");
+					playerTurn = true;
+					continue;
+				}
 
-				lines.push_back(L"Player hits Enemy for " + std::to_wstring(dmg) +
-				                L". Enemy health: " + std::to_wstring(newHP) +
-				                L"/" + std::to_wstring(enemy.getMaxHealth()));
-			} else {
-				int dmg = max(0, enemy.getStrength());
+				// Enemy attacks
+				int raw = max(0, enemy.getStrength());
+				int reducedBy = 0;
+				if (playerDefendReady) {
+					reducedBy = min(raw, player.getDefense());
+					playerDefendReady = false; // consume the defend
+				}
+				int dmg = max(0, raw - reducedBy);
 				int newHP = max(0, player.getCurrentHealth() - dmg);
 				player.setCurrentHealth(newHP);
 
-				lines.push_back(L"Enemy hits Player for " + std::to_wstring(dmg) +
-				                L". Player health: " + std::to_wstring(newHP) +
-				                L"/" + std::to_wstring(player.getMaxHealth()));
+				std::wstring line = L"Enemy hits Player for " + std::to_wstring(dmg);
+				if (reducedBy > 0) line += L" (reduced by " + std::to_wstring(reducedBy) + L")";
+				line += L". Player health: " + std::to_wstring(newHP) +
+				        L"/" + std::to_wstring(player.getMaxHealth());
+				log.push_back(line);
+
+				playerTurn = true;
+				continue;
 			}
-			playerTurn = !playerTurn;
+
+			// Player turn
+			for (;;) {
+				render(log, true, player);
+				int ch = _getch();
+				if (ch == '1') {
+					// Attack
+					int raw = max(0, player.getStrength());
+					int reducedBy = 0;
+					if (enemyDefendReady) {
+						reducedBy = min(raw, enemy.getDefense());
+						enemyDefendReady = false; // consume the defend
+					}
+					int dmg = max(0, raw - reducedBy);
+					int newHP = max(0, enemy.getCurrentHealth() - dmg);
+					enemy.setCurrentHealth(newHP);
+
+					std::wstring line = L"Player hits Enemy for " + std::to_wstring(dmg);
+					if (reducedBy > 0) line += L" (reduced by " + std::to_wstring(reducedBy) + L")";
+					line += L". Enemy health: " + std::to_wstring(newHP) +
+					        L"/" + std::to_wstring(enemy.getMaxHealth());
+					log.push_back(line);
+					break; // end player's turn
+				}
+				if (ch == '2') {
+					// Defend: buffer next incoming damage with player's Defense
+					playerDefendReady = true;
+					log.push_back(L"Player defends. Next damage taken reduced by " +
+					              std::to_wstring(player.getDefense()) + L".");
+					break; // defending consumes the turn
+				}
+				if (ch == '3') {
+					// Item (healing potion)
+					if (player.usePotion()) {
+						log.push_back(L"Player used a Healing Potion. Player health: " +
+						              std::to_wstring(player.getCurrentHealth()) + L"/" +
+						              std::to_wstring(player.getMaxHealth()) + L" (Potions left: " +
+						              std::to_wstring(player.getPotions()) + L")");
+						break; // using item consumes the turn
+					} else {
+						log.push_back(L"No usable potion (none owned or already at full health).");
+						// keep waiting on the same turn for a valid action
+					}
+				}
+				// ignore other keys
+			}
+			playerTurn = false;
 		}
 
+		// Outcome screen
 		if (enemy.isDead()) {
-			lines.push_back(L"Enemy defeated!");
-		} else if (player.isDead()) {
-			lines.push_back(L"You were defeated!");
+			log.push_back(L"Enemy defeated!");
+			log.push_back(L"You gained some gold!");
+		} 
+		else if (player.isDead()) {
+			log.push_back(L"You were defeated!");
 		}
 
-		// Render modal screen with transcript
-		system("cls");
-
-		HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
-		CONSOLE_SCREEN_BUFFER_INFO csbi{};
-		int cols = 80, rows = 25;
-		if (GetConsoleScreenBufferInfo(hOut, &csbi)) {
-			cols = csbi.srWindow.Right - csbi.srWindow.Left + 1;
-			rows = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
-		}
-
-		auto border = std::wstring(static_cast<size_t>(cols), L'#');
-		auto printCentered = [&](const std::wstring& s) {
-			int pad = max(0, (cols - static_cast<int>(s.size())) / 2);
-			std::wcout << std::wstring(static_cast<size_t>(pad), L' ') << s << L"\n";
-		};
-
-		std::wcout << border << L"\n";
-		printCentered(L"Combat");
-		std::wcout << L"\n";
-
-		for (const auto& l : lines) {
-			printCentered(l);
-		}
-
-		std::wcout << L"\n";
-		printCentered(L"[Esc]  [Enter]  [Space] to continue");
-		std::wcout << border << L"\n";
-		std::wcout.flush();
-
+		render(log, false, player);
 		for (;;) {
 			int ch = _getch();
 			if (ch == 27 || ch == 13 || ch == ' ') break;
@@ -516,7 +632,6 @@ class Levelling {
 	int upHealth = 0;
 	int upDefense = 0;
 	int upStrength = 0;
-	int upSpeed = 0;
 
 	static void ClearKeys() {
 		while (_kbhit()) { (void)_getch(); }
@@ -529,6 +644,19 @@ public:
 	template<typename TEnemy>
 	void enemyDifficultyIncrease(TEnemy& enemy) {
 		enemy.enemyDifficultyIncrease();
+
+		// Build a message listing only the stats that actually increased
+		int dH = 0, dD = 0, dS = 0;
+		enemy.getLastUpgradeDelta(dH, dD, dS);
+
+		std::wstring msg;
+		if (dH > 0) msg += L"- The enemies are looking healthier! \n";
+		if (dD > 0) msg += L"- The enemies are looking tougher! \n";
+		if (dS > 0) msg += L"- The enemies are looking stronger! \n";
+
+		// Show a simple modal before the leveling screen
+		Combat modal;
+		modal.OpenModal(L"Enemy Difficulty Increased", msg.c_str());
 	}
 
 	// Modal upgrade screen. Appears at the start of each level after gold is awarded.
@@ -556,20 +684,18 @@ public:
 			printCentered(L"- Current Health: " + std::to_wstring(player.getCurrentHealth()) + L"/" + std::to_wstring(player.getMaxHealth()));
 			printCentered(L"- Defense:    " + std::to_wstring(player.getDefense()));
 			printCentered(L"- Strength:   " + std::to_wstring(player.getStrength()));
-			printCentered(L"- Speed:      " + std::to_wstring(player.getSpeed()));
+			printCentered(L"- Potions:    " + std::to_wstring(player.getPotions()));
 			std::wcout << L"\n";
 
 			// Costs: cost = 1 + number of prior upgrades for that stat
 			int cH = 1 + upHealth;
 			int cD = 1 + upDefense;
 			int cS = 1 + upStrength;
-			int cSp = 1 + upSpeed;
 
 			printCentered(L"[1] +1 Max Health  (Cost: " + std::to_wstring(cH) + L")");
 			printCentered(L"[2] +1 Defense     (Cost: " + std::to_wstring(cD) + L")");
 			printCentered(L"[3] +1 Strength    (Cost: " + std::to_wstring(cS) + L")");
-			printCentered(L"[4] +1 Speed       (Cost: " + std::to_wstring(cSp) + L")");
-			printCentered(L"[5] Healing Potion  (Cost: 2)");
+			printCentered(L"[4] Healing Potion (Cost: 2)");
 			std::wcout << L"\n";
 
 			if (!lastMsg.empty()) {
@@ -608,7 +734,6 @@ public:
 			int cH = 1 + upHealth;
 			int cD = 1 + upDefense;
 			int cS = 1 + upStrength;
-			int cSp = 1 + upSpeed;
 
 			bool purchased = false;
 			switch (ch) {
@@ -642,29 +767,18 @@ public:
 					} else lastMsg = L"Not enough gold for +1 Strength.";
 					break;
 				case '4':
-					if (gold >= cSp) {
-						gold -= cSp;
-						upSpeed++;
-						player.setSpeed(player.getSpeed() + 1);
-						lastMsg = L"Purchased +1 Speed.";
-						purchased = true;
-					} else lastMsg = L"Not enough gold for +1 Speed.";
-					break;
-				case '5':
-					if (player.getCurrentHealth() >= player.getMaxHealth()) {
-						lastMsg = L"Health is already full.";
-					} 
-					else if (gold >= 2) {
+					if (gold >= 2) {
 						gold -= 2;
-						player.healToFull();
-						lastMsg = L"Used Healing Potion. Health fully restored.";
+						player.addPotions(1);
+						lastMsg = L"You gained a health potion!";
 						purchased = true;
 					}
 					else {
 						lastMsg = L"Not enough gold for Healing Potion.";
 					}
+					break;
 				default:
-					lastMsg = L"Press [1]-[5] to buy, or [Enter]/[Esc]/[Space] to start.";
+					lastMsg = L"Press [1]-[4] to buy, or [Enter]/[Esc]/[Space] to start.";
 					break;
 			}
 
@@ -1602,9 +1716,8 @@ public:
 			e.healToFull();
 			e.setDefense(enemy.getDefense());
 			e.setStrength(enemy.getStrength());
-			e.setSpeed(enemy.getSpeed());
 
-			e.placeAt(cx, cy);
+		 e.placeAt(cx, cy);
 			enemies.push_back(e);
 		}
 
@@ -1633,7 +1746,9 @@ public:
 	}
 
 	void Draw() const {
-		system("cls");
+		// Build the entire frame in memory and write once to the console to avoid excessive flushing.
+		std::string frame;
+		frame.reserve(static_cast<size_t>((height + 8) * (width + 4)));
 
 		// HUD
 		string hudLeft = "Level: " + to_string(level);
@@ -1641,58 +1756,65 @@ public:
 		string hudRight = "Gold: " + to_string(gold);
 		int total = width + 2;
 		int spaces = total - static_cast<int>(hudLeft.size()) - static_cast<int>(hudRight.size()) - static_cast<int>(hudMiddle.size());
-		if (spaces < 2) {
-			spaces = 2;
-		}
-		cout << hudLeft << string((spaces / 2), ' ') << hudMiddle << string((spaces / 2), ' ') << hudRight << endl;
+		if (spaces < 2) spaces = 2;
+		frame += hudLeft;
+		frame.append(spaces / 2, ' ');
+		frame += hudMiddle;
+		frame.append(spaces / 2, ' ');
+		frame += hudRight;
+		frame += '\n';
 
 		// Top border
-		for(int i=0;i<width+2; i++)
-			cout << "#";
-		cout << endl;
+		frame.append(width + 2, '#');
+		frame += '\n';
 
 		for (int i = 0; i < height; i++) {
 			for (int j = 0; j < width; j++) {
-				if (j == 0)
-					cout << "#"; // Left border
+				if (j == 0) frame += '#'; // Left border
 
 				if (i == player.getY() && j == player.getX()) {
-					cout << "O"; // Player position
+					frame += 'O'; // Player position
 				}
 				else if (!revealedAreas[i][j]) {
-					cout << " "; // Unrevealed area
+					frame += ' '; // Unrevealed area
 				}
 				else if (anyEnemyAt(j, i)) {
-					cout << "A"; // Enemy
+					frame += 'A'; // Enemy
 				}
 				else if (exitTile.isAt(j, i)) {
-					cout << "X"; // Exit tile (center of a different box)
+					frame += 'X'; // Exit tile (center of a different box)
 				}
 				else if (goldItems.isAt(j, i)) {
-					cout << "G"; // Gold in dead-end rooms
+					frame += 'G'; // Gold in dead-end rooms
 				}
 				else {
 					char c = grid[i][j];
 					if (c == TILE_FLOOR || c == TILE_BOX_WALL || c == TILE_CORRIDOR_WALL)
-						cout << c; // Corridor floor, box wall, corridor boundary
+						frame += c; // Corridor floor, box wall, corridor boundary
 					else
-						cout << " "; // Empty space
+						frame += ' '; // Empty space
 				}
 
-				if (j == width - 1)
-					cout << "#"; // Right border
+				if (j == width - 1) frame += '#'; // Right border
 			}
-			cout << endl;
+			frame += '\n';
 		}
 
 		// Bottom border
-		for (int i = 0; i < width + 2; i++)
-			cout << "#";
-		cout << endl;
+		frame.append(width + 2, '#');
+		frame += '\n';
 
-		cout << "Controls: W/A/S/D to move, X to exit" << endl;
-		cout << "Reach the exit (X) to advance levels and earn more gold!" << endl;
-		cout << "Be on the lookout for adversaries (A) in your way and don't forget to pick up any gold (G) you find!" << endl;
+		frame += "Controls: W/A/S/D to move, X to exit\n";
+		frame += "Reach the exit (X) to advance levels and earn more gold!\n";
+		frame += "Be on the lookout for adversaries (A) in your way and don't forget to pick up any gold (G) you find!\n";
+
+		// Write to console at the top-left without clearing the screen (avoids slow system(\"cls\"))
+		HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+		COORD origin{}; origin.X = 0; origin.Y = 0;
+		SetConsoleCursorPosition(hOut, origin);
+		DWORD written = 0;
+		// Use WriteConsoleA for speed and to avoid iostream flushing costs
+		WriteConsoleA(hOut, frame.c_str(), static_cast<DWORD>(frame.size()), &written, nullptr);
 	}
 
 	void Input() {
@@ -1737,28 +1859,21 @@ public:
 		int prevX = player.getX();
 		int prevY = player.getY();
 
-		int targetX = prevX;
-		int targetY = prevY;
-
 		int newX = prevX;
 		int newY = prevY;
 
 		switch (dir) {
 			case LEFT:
 				newX = prevX - 1;
-				targetX = newX - 1;
 				break;
 			case RIGHT:
 				newX = prevX + 1;
-				targetX = newX + 1;
 				break;
 			case UP:
 				newY = prevY - 1;
-				targetY = newY - 1;
 				break;
 			case DOWN:
 				newY = prevY + 1;
-				targetY = newY + 1;
 				break;
 			default:
 				return;
@@ -1773,12 +1888,10 @@ public:
 			revealCurrentSection();
 		}
 
-		// If player moved and is in the same box as an enemy, check contact and move enemies
 		bool playerMoved = (player.getX() != prevX) || (player.getY() != prevY);
 
-		// Trigger combat when moving onto an enemy
+		// Combat if player walked into an enemy (player goes first)
 		if (playerMoved && anyEnemyAt(player.getX(), player.getY())) {
-			// Find the concrete enemy on this tile
 			int idx = -1;
 			for (size_t i = 0; i < enemies.size(); ++i) {
 				if (enemies[i].isAt(player.getX(), player.getY())) { idx = static_cast<int>(i); break; }
@@ -1786,11 +1899,11 @@ public:
 
 			if (idx >= 0) {
 				Combat combat;
-				combat.OpenBattle(player, enemies[static_cast<size_t>(idx)]);
+				combat.OpenBattle(player, enemies[static_cast<size_t>(idx)], /*playerStarts=*/true);
 
-				// Remove the enemy only if defeated
 				if (enemies[static_cast<size_t>(idx)].isDead()) {
 					removeEnemiesAt(player.getX(), player.getY());
+					gold += rand() % 3 + 1; // reward for defeating enemy
 				}
 
 				// If player died, end the game immediately
@@ -1801,14 +1914,39 @@ public:
 			}
 		}
 
+		// Enemy movement
 		if (playerMoved) {
 			for (auto& e : enemies) {
 				if (!e.isPlaced()) continue;
 				for (const auto& b : boxes) {
 					if (b.contains(player.getX(), player.getY()) && b.contains(e.x(), e.y())) {
-						e.stepToward(targetX, targetY, grid, player.getX(), player.getY());
+						// Allow stepping onto the player's tile (no forbidX/forbidY)
+						e.stepToward(player.getX(), player.getY(), grid);
 						break;
 					}
+				}
+			}
+		}
+
+		// Combat if an enemy walked into the player (enemy goes first)
+		if (anyEnemyAt(player.getX(), player.getY())) {
+			int idx = -1;
+			for (size_t i = 0; i < enemies.size(); ++i) {
+				if (enemies[i].isAt(player.getX(), player.getY())) { idx = static_cast<int>(i); break; }
+			}
+
+			if (idx >= 0) {
+				Combat combat;
+				combat.OpenBattle(player, enemies[static_cast<size_t>(idx)], /*playerStarts=*/false);
+
+				if (enemies[static_cast<size_t>(idx)].isDead()) {
+					removeEnemiesAt(player.getX(), player.getY());
+					gold += rand() % 3 + 1; // reward for defeating enemy
+				}
+
+				if (player.isDead()) {
+					gameOver = true;
+					return;
 				}
 			}
 		}
@@ -1842,6 +1980,11 @@ public:
 };
 
 int main() {
+	// Speed up iostreams for faster rendering path (we use WriteConsoleA for frames anyway)
+	std::ios::sync_with_stdio(false);
+	std::cin.tie(nullptr);
+	std::wcin.tie(nullptr);
+
 	Game game;
 	game.Run();
 	return 0;
