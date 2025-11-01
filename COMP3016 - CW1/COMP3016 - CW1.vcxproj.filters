@@ -18,8 +18,5 @@
     <ClCompile Include="COMP3016 - CW1.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="diff COMP3016 - CW1.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
   </ItemGroup>
 </Project>

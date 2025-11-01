@@ -2006,9 +2006,13 @@ public:
 				case 's':
 					dir = DOWN;
 					break;
-				case 'p':
-					(void)player.usePotion();
+				case 'p': 
+					// If a potion was used, redraw immediately so HUD updates without waiting for movement.
+					if (player.usePotion()) {
+						Draw();
+					}
 					break;
+				
 				case 27:
 					gameOver = true;
 					break;
