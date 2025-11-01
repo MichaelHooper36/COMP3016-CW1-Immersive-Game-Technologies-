@@ -337,7 +337,7 @@ public:
 		// reset last-deltas
 		lastUpHealth = lastUpDefense = lastUpStrength = 0;
 
-		int points = 5;
+		int points = 3;
 		while (points-- > 0) {
 			switch (rand() % 3) {
 				case 0: lastUpHealth++;   break;
@@ -352,6 +352,17 @@ public:
 		strength  += lastUpStrength;
 
 		// keep health full after scaling
+		currentHealth = maxHealth;
+	}
+
+	// NEW: Apply explicit upgrades (used by Levelling to apply biased point distribution)
+	void applyUpgrades(int upH, int upD, int upS) {
+		lastUpHealth  = upH;
+		lastUpDefense = upD;
+		lastUpStrength= upS;
+		maxHealth += upH;
+		defense   += upD;
+		strength  += upS;
 		currentHealth = maxHealth;
 	}
 };
@@ -556,8 +567,8 @@ public:
 			std::wcout << L"\n";
 			if (showMenu) {
 				std::wstring defendStatus = playerDefendReady ? L" (Defend active)" : L"";
-				printCentered(L"Your turn: [1] Attack   [2] Defend   [3] Item   [4] Run (40%) (Potions: " +
-				              std::to_wstring(p.getPotions()) + L")" + defendStatus);
+				printCentered(L"Your turn: [1] Attack   [2] Defend   [3] Item (Potions: " +
+				              std::to_wstring(p.getPotions()) + L")   [4] Run (40%)" + defendStatus);
 			} else {
 				printCentered(L"[Esc]/[Enter]/[Space] to continue");
 			}
@@ -596,6 +607,11 @@ public:
 
 				// Enemy attacks
 				int raw = max(0, enemy.getStrength());
+				if (rand() % 100 < 10) {
+					// 10% chance for critical hit (1.5x damage)
+					raw = static_cast<int>(static_cast<double>(raw) * 1.5);
+					log.push_back(L"Enemy lands a critical hit!");
+				}
 				int reducedBy = 0;
 				bool playerConsumedDefend = false;
 				if (playerDefendReady) {
@@ -607,19 +623,19 @@ public:
 				int newHP = max(0, player.getCurrentHealth() - dmg);
 				player.setCurrentHealth(newHP);
 
-				std::wstring line = L"Enemy hits Player for " + std::to_wstring(dmg);
+				std::wstring line = L"Enemy hits you for " + std::to_wstring(dmg);
 				if (reducedBy > 0) line += L" (reduced by " + std::to_wstring(reducedBy) + L")";
-				line += L". Player health: " + std::to_wstring(newHP) +
+				line += L". Health: " + std::to_wstring(newHP) +
 				        L"/" + std::to_wstring(player.getMaxHealth());
 				log.push_back(line);
 
 				// Parry: if defending and actually took damage, deal true damage back
 				if (playerConsumedDefend && dmg > 0) {
-					int parry = (dmg * (player.getStrength() / 4));
+					int parry = ((dmg + player.getStrength()) / player.getDefense());
 					parry = max(1, parry); // ensure parry has effect
 					int eHP = max(0, enemy.getCurrentHealth() - parry);
 					enemy.setCurrentHealth(eHP);
-					log.push_back(L"Player parries and deals " + std::to_wstring(parry) + L" damage back. Enemy health: " +
+					log.push_back(L"You parry and deals " + std::to_wstring(parry) + L" damage back. Enemy health: " +
 					              std::to_wstring(eHP) + L"/" + std::to_wstring(enemy.getMaxHealth()));
 				}
 
@@ -635,6 +651,11 @@ public:
 				if (ch == '1') {
 					// Attack
 					int raw = max(0, player.getStrength());
+					if (rand() % 100 < 10) {
+						// 10% chance for critical hit (1.5x damage)
+						raw = static_cast<int>(static_cast<double>(raw) * 1.5);
+						log.push_back(L"You land a critical hit!");
+					}
 					int reducedBy = 0;
 					bool enemyConsumedDefend = false;
 					if (enemyDefendReady) {
@@ -646,7 +667,7 @@ public:
 					int newHP = max(0, enemy.getCurrentHealth() - dmg);
 					enemy.setCurrentHealth(newHP);
 
-					std::wstring line = L"Player hits Enemy for " + std::to_wstring(dmg);
+					std::wstring line = L"You hit Enemy for " + std::to_wstring(dmg);
 					if (reducedBy > 0) line += L" (reduced by " + std::to_wstring(reducedBy) + L")";
 					line += L". Enemy health: " + std::to_wstring(newHP) +
 					        L"/" + std::to_wstring(enemy.getMaxHealth());
@@ -654,11 +675,11 @@ public:
 
 					// Parry: if defending and actually took damage, deal true damage back
 					if (enemyConsumedDefend && dmg > 0) {
-						int parry = (dmg * (enemy.getStrength() / 4));
+						int parry = ((dmg + enemy.getStrength()) / enemy.getDefense());
 						parry = max(1, parry);
 						int pHP = max(0, player.getCurrentHealth() - parry);
 						player.setCurrentHealth(pHP);
-						log.push_back(L"Enemy parries and deals " + std::to_wstring(parry) + L" damage back. Player health: " +
+						log.push_back(L"Enemy parries and deals " + std::to_wstring(parry) + L" damage back. Health: " +
 						              std::to_wstring(pHP) + L"/" + std::to_wstring(player.getMaxHealth()));
 						enemyConsumedDefend = false;
 					}
@@ -668,14 +689,14 @@ public:
 				if (ch == '2') {
 					// Defend
 					playerDefendReady = true;
-					log.push_back(L"Player defends. Next damage taken reduced by " +
+					log.push_back(L"You defend. Next damage taken reduced by " +
 					              std::to_wstring(player.getDefense()) + L".");
 					break; // defending consumes the turn
 				}
 				if (ch == '3') {
 					// Item (healing potion)
 					if (player.usePotion()) {
-						log.push_back(L"Player used a Healing Potion. Player health: " +
+						log.push_back(L"You used a Healing Potion. Health: " +
 						              std::to_wstring(player.getCurrentHealth()) + L"/" +
 						              std::to_wstring(player.getMaxHealth()) + L" (Potions left: " +
 						              std::to_wstring(player.getPotions()) + L")");
@@ -742,6 +763,11 @@ class Levelling {
 	int upDefense = 0;
 	int upStrength = 0;
 
+	// NEW: track per-session purchases to bias enemy upgrades
+	int boughtHealthThis = 0;
+	int boughtDefenseThis = 0;
+	int boughtStrengthThis = 0;
+
 	static void ClearKeys() {
 		while (_kbhit()) { (void)_getch(); }
 	}
@@ -752,24 +778,54 @@ public:
 	// Wrapper to centralize difficulty increase as requested.
 	template<typename TEnemy>
 	void enemyDifficultyIncrease(TEnemy& enemy) {
-		enemy.enemyDifficultyIncrease();
+		// Bias weights based on this session's player purchases:
+		// - Player Strength -> Enemy Defense gets +5% per purchase
+		// - Player Defense  -> Enemy Health  gets +5% per purchase
+		// - Player Health   -> Enemy Strength gets +5% per purchase
+		double wH = 1.0 + 0.25 * static_cast<double>(boughtDefenseThis);
+		double wD = 1.0 + 0.25 * static_cast<double>(boughtStrengthThis);
+		double wS = 1.0 + 0.25 * static_cast<double>(boughtHealthThis);
+
+		auto chooseStat = [&](double wh, double wd, double ws) -> int {
+			double sum = wh + wd + ws;
+			if (sum <= 0.0) { return rand() % 3; }
+			double r = (static_cast<double>(rand()) / static_cast<double>(RAND_MAX)) * sum;
+			if (r < wh) return 0; r -= wh;
+			if (r < wd) return 1;
+			return 2;
+		};
+
+		// Spend 3 points using the biased distribution
+		int dH = 0, dD = 0, dS = 0;
+		for (int i = 0; i < 3; ++i) {
+			switch (chooseStat(wH, wD, wS)) {
+				case 0: ++dH; break;
+				case 1: ++dD; break;
+				default: ++dS; break;
+			}
+		}
+
+		// Apply to enemy and keep "last delta" for messaging
+		enemy.applyUpgrades(dH, dD, dS);
 
 		// Build a message listing only the stats that actually increased
-		int dH = 0, dD = 0, dS = 0;
-		enemy.getLastUpgradeDelta(dH, dD, dS);
-
 		std::wstring msg;
 		if (dH > 0) msg += L"- The enemies are looking healthier! \n";
 		if (dD > 0) msg += L"- The enemies are looking tougher! \n";
 		if (dS > 0) msg += L"- The enemies are looking stronger! \n";
 
-		// Show a simple modal before the leveling screen
 		Combat modal;
 		modal.OpenModal(L"Enemy Difficulty Increased", msg.c_str());
+
+		// Reset session counts after use (safety; next Open() will reset them too)
+		boughtHealthThis = boughtDefenseThis = boughtStrengthThis = 0;
 	}
 
 	// Modal upgrade screen. Appears at the start of each level after gold is awarded.
 	void Open(Player& player, int& gold) {
+		// Reset per-session purchase tracking
+		boughtHealthThis = boughtDefenseThis = boughtStrengthThis = 0;
+
 		bool done = false;
 		std::wstring lastMsg;
 
@@ -850,7 +906,7 @@ public:
 				 if (gold >= cH) {
 					 gold -= cH;
 					 upHealth += 1;
-					 // Increase max health and grant 1 immediate health so upgrades feel rewarding
+					 boughtHealthThis += 1; // track this session
 					 player.setMaxHealth(player.getMaxHealth() + 2);
 					 player.setCurrentHealth(player.getCurrentHealth() + 2);
 					 lastMsg = L"Purchased +2 Max Health.";
@@ -861,6 +917,7 @@ public:
 				 if (gold >= cD) {
 					 gold -= cD;
 					 upDefense++;
+					 boughtDefenseThis += 1; // track this session
 					 player.setDefense(player.getDefense() + 1);
 					 lastMsg = L"Purchased +1 Defense.";
 					 purchased = true;
@@ -870,6 +927,7 @@ public:
 				 if (gold >= cS) {
 					 gold -= cS;
 					 upStrength++;
+					 boughtStrengthThis += 1; // track this session
 					 player.setStrength(player.getStrength() + 1);
 					 lastMsg = L"Purchased +1 Strength.";
 					 purchased = true;
@@ -1016,14 +1074,14 @@ class Game {
 	Enemy enemy; //enemy stats (baseline scaled across levels)
 	Levelling levelling; // NEW: levelling system
 
-	static const int MAX_WIDTH = 110;
+	static const int MAX_WIDTH = 109;
 	static const int MAX_HEIGHT = 25;
 	static const int MAX_BOXES = 14;
 
 	vector<vector<bool>> revealedAreas;
 
 public:
-	Game(int width = 60, int height = 15, int boxNumber = 4)
+	Game(int width = 59, int height = 15, int boxNumber = 4)
 		: gameOver(false), width(width), height(height), boxNumber(boxNumber), playerX(0), playerY(0), dir(STOP), level(1), gold(0) {
 		grid.assign(height, vector<char>(width, ' '));
 	}
@@ -1612,7 +1670,8 @@ public:
 						if (connections.find(kkey) != connections.end()) continue;
 						long long dx = centers[i].first - centers[j].first;
 						long long dy = centers[i].second - centers[j].second;
-						cand.emplace_back(dx*dx + dy*dy, make_pair(i,j));
+						long long d2 = dx*dx + dy*dy;
+						cand.emplace_back(d2, make_pair(i,j));
 					}
 				}
 				if (cand.empty()) break;
@@ -1860,16 +1919,20 @@ public:
 		frame.reserve(static_cast<size_t>((height + 8) * (width + 4)));
 
 		// HUD
-		string hudLeft = "Level: " + to_string(level);
-		string hudMiddle = "Health: " + to_string(player.getCurrentHealth()) + "/" + to_string(player.getMaxHealth());
+		string hudLeft = "Level " + to_string(level);
+		string hudMiddleLeft = "Health: " + to_string(player.getCurrentHealth()) + "/" + to_string(player.getMaxHealth());
+		string hudMiddleRight = "Potions: " + to_string(player.getPotions());
 		string hudRight = "Gold: " + to_string(gold);
 		int total = width + 2;
-		int spaces = total - static_cast<int>(hudLeft.size()) - static_cast<int>(hudRight.size()) - static_cast<int>(hudMiddle.size());
+		int spaces = total - static_cast<int>(hudLeft.size()) - static_cast<int>(hudRight.size()) - static_cast<int>(hudMiddleLeft.size());
+		int leftOverSpaces = (spaces / 2) - static_cast<int>(hudMiddleRight.size());
 		if (spaces < 2) spaces = 2;
 		frame += hudLeft;
 		frame.append(spaces / 2, ' ');
-		frame += hudMiddle;
-		frame.append(spaces / 2, ' ');
+		frame+= hudMiddleLeft;
+		frame.append(leftOverSpaces / 2, ' ');
+		frame += hudMiddleRight;
+		frame.append(leftOverSpaces / 2, ' ');
 		frame += hudRight;
 		frame += '\n';
 
@@ -1962,9 +2025,11 @@ public:
 		height = min(MAX_HEIGHT, height + 1);
 		boxNumber = min(MAX_BOXES, boxNumber + 1);
 
-		// Centralize difficulty scaling and levelling UI here
-		levelling.enemyDifficultyIncrease(enemy); // scale future enemies
+		// Player upgrades first
 		levelling.Open(player, gold);             // allow spending gold to upgrade player
+
+		// Then scale enemies (so they level up after the player)
+		levelling.enemyDifficultyIncrease(enemy); // scale future enemies
 
 		// Ensure the leveling screen is cleared before rendering the next level frame
 		system("cls");
