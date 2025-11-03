@@ -8,7 +8,7 @@ This game is a rogue-like game where the player character moves through randomly
 There are no additional dependencies used in this code. It only uses the standard C++ library. There are 12 includsions that are required for the code to function and that's it.  
   
 ## Use of AI
-<img width="934" height="755" alt="image" src="https://github.com/user-attachments/assets/6e4609ce-340e-44c4-9bd4-b4818aed279c" />
+<img width="930" height="754" alt="image" src="https://github.com/user-attachments/assets/a3e333ae-910f-4238-8cf0-0b3a60d86fa5" />
   
 ## Game Programming Patterns
 The biggest programming pattern that is being used is the double buffer. At the beginning of the level, it has to draw many individual items onto the screen, the most important ones being the text at the top of the screen, the main box that everything else is in, and the room containing the player. Every time the player moves, we will check to see if the player is in a corridor or room that has not been revealed and draw the newly revealed area and any enemies or exits that might be inside.  
