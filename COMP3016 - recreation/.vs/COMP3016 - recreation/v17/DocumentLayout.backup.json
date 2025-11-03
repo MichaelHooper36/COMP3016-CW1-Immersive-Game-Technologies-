@@ -1,0 +1,37 @@
+{
+  "Version": 1,
+  "WorkspaceRootPath": "C:\\Users\\mikey\\Documents\\GitHub\\COMP3016-CW1-Immersive-Game-Technologies-\\COMP3016 - recreation\\",
+  "Documents": [
+    {
+      "AbsoluteMoniker": "D:0:0:{79631987-0618-4AAF-B6C2-9033D21C76F5}|COMP3016 - recreation.vcxproj|C:\\Users\\mikey\\Documents\\GitHub\\COMP3016-CW1-Immersive-Game-Technologies-\\COMP3016 - recreation\\COMP3016 - recreation.cpp||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}",
+      "RelativeMoniker": "D:0:0:{79631987-0618-4AAF-B6C2-9033D21C76F5}|COMP3016 - recreation.vcxproj|solutionrelative:COMP3016 - recreation.cpp||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}"
+    }
+  ],
+  "DocumentGroupContainers": [
+    {
+      "Orientation": 0,
+      "VerticalTabListWidth": 256,
+      "DocumentGroups": [
+        {
+          "DockedWidth": 200,
+          "SelectedChildIndex": 0,
+          "Children": [
+            {
+              "$type": "Document",
+              "DocumentIndex": 0,
+              "Title": "COMP3016 - recreation.cpp",
+              "DocumentMoniker": "C:\\Users\\mikey\\Documents\\GitHub\\COMP3016-CW1-Immersive-Game-Technologies-\\COMP3016 - recreation\\COMP3016 - recreation.cpp",
+              "RelativeDocumentMoniker": "COMP3016 - recreation.cpp",
+              "ToolTip": "C:\\Users\\mikey\\Documents\\GitHub\\COMP3016-CW1-Immersive-Game-Technologies-\\COMP3016 - recreation\\COMP3016 - recreation.cpp",
+              "RelativeToolTip": "COMP3016 - recreation.cpp",
+              "ViewState": "AgIAAHYFAAAAAAAAAAAAALgIAAABAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000677|",
+              "WhenOpened": "2025-11-03T17:39:28.187Z",
+              "EditorCaption": ""
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
